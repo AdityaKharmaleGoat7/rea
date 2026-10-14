@@ -19,14 +19,15 @@ import type { PcapCommandLauncher } from "../../../src/pcap/PcapCommand.js";
 
 const it = test.skipIf(process.platform !== "linux");
 
-const CAPINFOS_OUTPUT = [
-  "File name:           /work/capture.pcap",
-  "File type:           Wireshark/tcpdump/... - pcap",
-  "File encapsulation:  Ethernet",
-  "Packet size limit:   file hdr: 262144 bytes",
-  "Number of packets:   3",
-  "Capture duration:    0.123 seconds",
-].join("\n");
+const CAPINFOS_OUTPUT =
+  [
+    "File name:           /work/capture.pcap",
+    "File type:           Wireshark/tcpdump/... - pcap",
+    "File encapsulation:  Ethernet",
+    "Packet size limit:   file hdr: 262144 bytes",
+    "Number of packets:   3",
+    "Capture duration:    0.123 seconds",
+  ].join("\n") + "\n";
 
 const TSHARK_JSON = JSON.stringify([
   {
@@ -90,7 +91,7 @@ if [ "$1" = "--version" ]; then printf 'Capinfos (Wireshark) 4.6.6-stub\\n'; exi
 if [ "${String(options.failCapinfos === true)}" = "true" ]; then
   printf 'capinfos: The file is not a capture file' >&2; exit 1
 fi
-printf '%s\\n' '${CAPINFOS_OUTPUT.replace(/'/gu, "'\\''")}'
+printf '%s' '${CAPINFOS_OUTPUT.replace(/'/gu, "'\\''")}'
 exit 0
 `,
     { mode: 0o755 },
@@ -209,43 +210,46 @@ it.each(["capinfos", "tshark"] as const)(
       operation: "inspect_pcap_capture",
       input: { path },
     });
-    if (result.ok) throw new Error("Expected cleanup to remain unresolved");
-    expect(result.error).toMatchObject({ cleanupIncomplete: true });
-    expect(result.error.diagnostics).toMatchObject({
-      reason: "injected retained cleanup failure",
-      previous_error: null,
-      captured_output: {
-        stdout: stage === "capinfos" ? CAPINFOS_OUTPUT : TSHARK_JSON,
-        truncated: false,
-      },
-    });
-    expect(result.error.partialObservation).toMatchObject({
-      normalized_result:
-        stage === "capinfos"
-          ? {
-              stage: "capinfos-complete-tshark-not-run",
-              packet_count: 3,
-            }
-          : {
-              coverage: "complete",
-              packet_count: 3,
-              endpoints: expect.any(Array),
-            },
-    });
-    expect(producerLaunches).toBe(1);
-    expect(await readFile(path)).toEqual(Buffer.from("pcap-fixture-bytes"));
-    expect(
-      result.error.cleanupResources.some((resource) =>
-        resource.endsWith("/capture.pcap"),
-      ),
-    ).toBe(true);
-    expect(
-      result.error.cleanupResources.some((resource) =>
-        resource.startsWith("process-group:"),
-      ),
-    ).toBe(true);
-    mayClean = true;
-    await provider.close();
+    try {
+      if (result.ok) throw new Error("Expected cleanup to remain unresolved");
+      expect(result.error).toMatchObject({ cleanupIncomplete: true });
+      expect(result.error.diagnostics).toMatchObject({
+        reason: "injected retained cleanup failure",
+        previous_error: null,
+        captured_output: {
+          stdout: stage === "capinfos" ? CAPINFOS_OUTPUT : TSHARK_JSON,
+          truncated: false,
+        },
+      });
+      expect(result.error.partialObservation).toMatchObject({
+        normalized_result:
+          stage === "capinfos"
+            ? {
+                stage: "capinfos-complete-tshark-not-run",
+                packet_count: 3,
+              }
+            : {
+                coverage: "complete",
+                packet_count: 3,
+                endpoints: expect.any(Array),
+              },
+      });
+      expect(producerLaunches).toBe(1);
+      expect(await readFile(path)).toEqual(Buffer.from("pcap-fixture-bytes"));
+      expect(
+        result.error.cleanupResources.some((resource) =>
+          resource.endsWith("/capture.pcap"),
+        ),
+      ).toBe(true);
+      expect(
+        result.error.cleanupResources.some((resource) =>
+          resource.startsWith("process-group:"),
+        ),
+      ).toBe(true);
+    } finally {
+      mayClean = true;
+      await provider.close();
+    }
   },
 );
 
