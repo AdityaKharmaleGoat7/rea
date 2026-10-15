@@ -5,6 +5,7 @@ import {
 } from "./application/Doctor.js";
 import { fileURLToPath } from "node:url";
 import { inspectJadxProvider } from "./android/JadxDoctor.js";
+import { inspectFirmwareProviders } from "./firmware/FirmwareDoctor.js";
 import { inspectSystemGhidraProvider } from "./ghidra/GhidraDoctor.js";
 import { inspectIdaRegistration } from "./ida/IdaDoctor.js";
 import { readIdaConfiguration } from "./ida/IdaConfiguration.js";
@@ -45,6 +46,7 @@ export const createSystemDoctorHost = (
       await inspectSystemGhidraProvider(environment),
       inspectIdaRegistration(environment.REA_IDA_MCP_CONFIG),
       await inspectJadxProvider(environment),
+      ...(await inspectFirmwareProviders(environment)),
     ],
     linuxDemoRuntimeCheck: () => inspectLinuxPrivateDisplay(environment),
   });
