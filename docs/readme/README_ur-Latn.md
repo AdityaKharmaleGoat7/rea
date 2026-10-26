@@ -1,7 +1,7 @@
 <div align="center">
 
 [English](../../README.md) · [简体中文](README_zh.md) · [繁體中文](README_zh-TW.md) · [日本語](README_ja.md) · [한국어](README_ko.md) · [Türkçe](README_tr.md) · [Русский](README_ru.md) · [Tiếng Việt](README_vi.md) · [ไทย](README_th.md) · [Deutsch](README_de.md) · [Español](README_es.md) · [Français](README_fr.md) · [Українська](README_uk.md) · [Polski](README_pl.md) · [Português (Brasil)](README_pt-BR.md) · [العربية](README_ar.md) · [فارسی](README_fa.md) · [Bahasa Indonesia](README_id.md) · [Italiano](README_it.md)
-· [Ελληνικά](README_el.md) · [മലയാളം](README_ml.md) · **Roman Urdu**
+· [Ελληνικά](README_el.md) · [മലയാളം](README_ml.md) · **Roman Urdu** · [Română](README_ro.md)
 
 # REA: Reverse Engineer Anything
 
@@ -20,7 +20,7 @@
 
 **[Website](https://rea.tools/) · [Guides](https://rea.tools/guides/) · [Showcases](https://rea.tools/showcase/)**
 
-[Jaldi shuru karein](#jaldi-shuru-karein) · [REA kaise kaam karta hai](#rea-kaise-kaam-karta-hai) · [Kya kuch analyze kar sakte hain](#kya-kuch-analyze-kar-sakte-hain) · [Amli misaalein](#amli-misaalein) · [FAQ](#faq) · [Documentation](#documentation)
+[Jaldi shuru karein](#jaldi-shuru-karein) · [REA kaise kaam karta hai](#rea-kaise-kaam-karta-hai) · [Kya kuch analyze kar sakte hain](#kya-kuch-analyze-kar-sakte-hain) · [Amli misaalein](#amli-misaalein) · [RL environments banayein](#build-rl-environments) · [FAQ](#faq) · [Documentation](#documentation)
 
 <code>npx rea-agents setup</code>
 
@@ -198,10 +198,12 @@ Mazeed tools aur host support target par depend karte hain:
 | PE certificates         | Authenticode WIN_CERTIFICATE entries aur PKCS#7 signer/X.509 identity fields                      | Built-in static PE inspection; [PE certificates](../pe-certificates.md)                                                           |
 | PE imports              | Import aur delay-load DLL names, ordinals, IAT RVAs aur pefile import hash                        | Built-in static PE inspection; [PE imports](../pe-imports.md)                                                                     |
 | ELF notes               | PT_NOTE/SHT_NOTE owners, types, GNU build-id aur ABI-tag fields                                   | Built-in static ELF inspection; [ELF notes](../elf-notes.md)                                                                      |
+| Linux kernel modules    | .modinfo keys, __versions CRCs, this_module presence, and signature trailer                       | Built-in static ELF inspection; [kernel modules](../kernel-modules.md)                                                            |
 | Erlang BEAM             | IFF chunks, atoms, exports, imports, lambdas aur Code header                                      | Built-in static BEAM inspection; [Erlang BEAM](../erlang-beam.md)                                                                 |
 | WASM artifact           | Validation, sections, exact import/export WAT forms aur decoded WAT                               | Aapka diya hua WABT 1.0.42; `inspect_wasm_artifact`                                                                               |
 | EVM bytecode            | Dispatch selectors, byte offsets, inferred arguments aur mutability                               | Linux x64 par local raw/hex carrier; [offline EVM guide](../evm-bytecode.md)                                                      |
 | SQLite databases        | Tables, columns, indexes, views, triggers aur selected ordinary-table rows                        | Local database/WAL snapshot; native SQLite limits ke saath Node.js 24.x >=24.15 ya 26+                                            |
+| Apple IPS crash reports | Apple .ips metadata, threads, images aur crash classification                                     | Built-in static JSON inspection; [Apple IPS](../apple-ips.md)                                                                     |
 | Recorded Linux crashes  | Raw notes, har recorded thread ke registers/signals aur optional mapping candidates               | Linux x64 par aapka diya hua pwntools; optional GDB/pwndbg; [recorded crashes](../recorded-crashes.md)                            |
 | JavaScript / Electron   | Modules, imports, source maps, routes, IPC aur native add-on relationships                        | Node.js aur npm; Linux: procps-compatible `ps`; [application analysis](../javascript-application-workflows.md)                    |
 | Websites                | Page structure, scripts, network observations aur requested screenshots                           | Chrome-family browser; [browser analysis](../browser-observation.md)                                                              |
@@ -279,10 +281,53 @@ output se compare karein.
 [Case study parhein](https://rea.tools/showcase/th04/) ·
 [Reconstruction repository](https://github.com/N0zoM1z0/th04)
 
+### REA se RL environments banayein
+
+Web app session record karein, us ki API ko tools mein badlein aur AI agent ke liye environment export karein. AgentEnv ke saath chalayein, phir RL training ya evaluation ke liye tasks aur reward checks shamil karein.
+
+[Environment banane ki rehnumai](https://rea.tools/guides/rl-environments/) ·
+[X par demo dekhein](https://x.com/reatools/status/2112574822584918075?s=20)
+
 Agar aapne REA se koi dilchasp kaam kiya hai to hum dekhna chahenge. Apna case
 [issue](https://github.com/morluto/rea/issues) ya
 [pull request](https://github.com/morluto/rea/pulls) mein share karein. Target,
 apna sawal, REA ne kaise madad ki aur kya mila, yeh sab batayein.
+
+<a id="build-rl-environments"></a>
+
+## RL environments banayein
+
+AI agent ke liye local environment banayein jahan woh asal app chalaye baghair issue dhoondhne ya folder banane jaise kaam ki mashq kar sake. Ise reinforcement learning (RL) ya agent ke kaam poore karne ki salahiyat jaanchne ke liye istemal karein.
+
+REA record kiye hue API requests aur responses ko aise tools mein badalta hai jinhein agent call kar sakta hai. Environment recorded data istemal karta hai aur sirf woh tabdeeliyan support karta hai jin ke asraat recording tasdeeq karti hai.
+
+Agent mein REA setup karne ke baad neeche example URL aur folder tasks ko apne app ke mutabiq badlein:
+
+```text
+Meri test web app se REA ke zariye RL environment banao:
+http://127.0.0.1:3000
+Folders ki list, creation, rename aur deletion cover karo. Test folders bana
+aur hata sakte ho, lekin mojooda data tabdeel na karo.
+my-env naam ke folder mein save karo, kaam karne wale operations check karo aur chalane ka tareeqa batao.
+```
+
+<details>
+<summary>Command line istemal karein</summary>
+
+Yeh commands tab istemal karein jab app ke browser requests aur responses ki recording pehle se file mein ho. Result chalane ke liye AgentEnv aur Docker bhi chahiye.
+
+```sh
+rea environment-build ./session.har ./my-env --name my-env --json
+agent-env run ./my-env
+```
+
+</details>
+
+REA chalne ke liye tayyar environment aur aik bunyadi test export karta hai jo us ka shuru hona aur jawab dena check karta hai. Apne RL framework ke saath task goals aur reward checks tay karein aur training chalayein.
+
+[Environment banane ki rehnumai](https://rea.tools/guides/rl-environments/) ·
+[Environment reference](../agent-environments.md) ·
+[X par demo dekhein](https://x.com/reatools/status/2112574822584918075?s=20)
 
 ## FAQ
 

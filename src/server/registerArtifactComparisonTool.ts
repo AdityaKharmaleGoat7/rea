@@ -6,16 +6,14 @@ import { compareArtifacts } from "../domain/artifactComparison.js";
 import { ARTIFACT_COMPARISON_PROVIDER } from "../domain/comparisonEvidenceIdentity.js";
 import { createEvidence } from "../domain/evidence.js";
 import { readEvidence } from "../domain/evidenceValidation.js";
-import { jsonValueSchema } from "../domain/jsonValue.js";
 import { resolveArtifactComparisonEvidence } from "../application/artifacts/ArtifactComparisonEvidence.js";
-import { investigationEvidenceLookup } from "../application/investigation/InvestigationEvidence.js";
 import type { RecordUnknownInput } from "../domain/residualUnknown.js";
 import { recordDerivedEvidence } from "./recordDerivedEvidence.js";
 import { runDerivedOperation } from "./runDerivedOperation.js";
 import { toolRegistrationOptions } from "./toolRegistrationOptions.js";
 import { withAdmittedAnalysis } from "./analysisAdmission.js";
 import { runAdmittedToolOperation } from "./admittedToolOperation.js";
-import { recordSessionEvidenceSources } from "./sessionEvidence.js";
+import { recordEvidenceSources } from "../application/investigation/recordEvidenceSources.js";
 
 /** Register Evidence-backed deterministic artifact comparison. */
 export const registerArtifactComparisonTool = (
@@ -24,7 +22,7 @@ export const registerArtifactComparisonTool = (
   contract: ReturnType<typeof toolContract<"compare_artifacts">>,
 ): void => {
   const admission = withAdmittedAnalysis({ kind: "session", session });
-  const evidenceById = investigationEvidenceLookup(session);
+  const evidenceById = session.evidenceForAnalysis.bind(session);
   server.registerTool(
     contract.name,
     toolRegistrationOptions(contract),
@@ -61,7 +59,7 @@ export const registerArtifactComparisonTool = (
           if (!computed.ok)
             return server.delivery.toCallToolResult(computed, contract);
           const { left, right, comparison } = computed.value;
-          const recordedSources = recordSessionEvidenceSources(
+          const recordedSources = recordEvidenceSources(
             (source) => session.recordEvidence(source),
             [left, right],
           );
@@ -79,7 +77,7 @@ export const registerArtifactComparisonTool = (
                 left_evidence_ids: leftEvidenceIds,
                 right_evidence_ids: rightEvidenceIds,
               },
-              result: jsonValueSchema.parse(comparison),
+              result: comparison,
               confidence: "derived",
               authority: "analyst-inference",
               limitations: comparison.limitations,

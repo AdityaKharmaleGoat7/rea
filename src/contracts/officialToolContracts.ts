@@ -49,8 +49,8 @@ export const OFFICIAL_TOOL_CONTRACTS = [
   ),
   official(
     "inspect_native_load_image",
-    "Verify the provider's loaded DOS MZ or explicitly selected COM image against its immutable target snapshot: complete original/modified source-byte digests, header/module file mappings and memory digests, relocations and external entry. Returns measured observations and independent checks with mismatch coordinates. COM verification includes its imposed entry register context and does not claim PSP/runtime coverage. Overlay and uninitialized coverage remain explicit; other formats return unsupported. Does not execute or modify the target.",
-    z.strictObject({}),
+    "Inspect the provider's measured source digests, memory mappings, relocations, entry points and entry register context. Independent snapshot verification supports DOS MZ, explicitly selected COM, raw binaries and GameCube DOL; other formats retain their observations with unsupported verification. Overlay and uninitialized coverage remain explicit. Select detail summary for verification state and counts, retaining complete Evidence for inspect_analysis_view kind native-load-image: collection source_files, mappings, relocations, entry_points, entry_context, checks or sections, with indices, fields and offset/limit paging. Relocation bytes and check expected/observed payloads require explicit fields; defaults keep metadata. Null collections are unrecorded or inapplicable. Does not execute or modify the target.",
+    z.strictObject({ detail: analysisDetailSchema }),
   ),
   official(
     "inspect_native_data_type",
@@ -152,8 +152,8 @@ export const OFFICIAL_TOOL_CONTRACTS = [
   ),
   official(
     "procedure_address",
-    "Resolve an unambiguous procedure symbol name or provider-normalized address to its canonical entry address. External address spaces remain explicit.",
-    z.object({ procedure, document }),
+    "Resolve an unambiguous procedure symbol name or provider-normalized address to its canonical entry address. External address spaces remain explicit. Select detail summary for selected facts and a context digest; native-observation and native-context views retain complete source access.",
+    z.object({ procedure, document, detail: analysisDetailSchema }),
   ),
   official(
     "procedure_assembly",
@@ -162,13 +162,13 @@ export const OFFICIAL_TOOL_CONTRACTS = [
   ),
   official(
     "procedure_callees",
-    "Return the provider's resolved direct callees for one procedure identified by symbol or address. Unresolved indirect calls may be absent; use analyze_function and typed references to preserve available edge uncertainty. Ghidra terminal-call assumptions that may cut the analyzed body are reported in Evidence limitations.",
-    z.object({ procedure, document }),
+    "Return the provider's resolved direct callees for one procedure identified by symbol or address. Unresolved indirect calls may be absent; use analyze_function and typed references to preserve available edge uncertainty. Ghidra terminal-call assumptions that may cut the analyzed body are reported in Evidence limitations. Select detail summary for selected facts and a context digest; native-observation and native-context views retain complete source access.",
+    z.object({ procedure, document, detail: analysisDetailSchema }),
   ),
   official(
     "procedure_callers",
-    "Return the provider's resolved direct callers for one procedure identified by symbol or address. Results reflect completed static analysis and may omit unresolved indirect references. Ghidra terminal-call assumptions that may cut the analyzed body are reported in Evidence limitations.",
-    z.object({ procedure, document }),
+    "Return the provider's resolved direct callers for one procedure identified by symbol or address. Results reflect completed static analysis and may omit unresolved indirect references. Ghidra terminal-call assumptions that may cut the analyzed body are reported in Evidence limitations. Select detail summary for selected facts and a context digest; native-observation and native-context views retain complete source access.",
+    z.object({ procedure, document, detail: analysisDetailSchema }),
   ),
   official(
     "procedure_info",
@@ -199,8 +199,8 @@ export const OFFICIAL_TOOL_CONTRACTS = [
   ),
   official(
     "resolve_containing_procedure",
-    "Resolve an arbitrary address, including an interior instruction or exact external entry, to its provider-analyzed containing procedure. A negative result distinguishes outside segments from not in a procedure and is never guessed from nearby symbols.",
-    z.object({ address, document }),
+    "Resolve an arbitrary address, including an interior instruction or exact external entry, to its provider-analyzed containing procedure. A negative result distinguishes outside segments from not in a procedure and is never guessed from nearby symbols. Select detail summary for selected facts and a context digest; native-observation and native-context views retain complete source access.",
+    z.object({ address, document, detail: analysisDetailSchema }),
   ),
   official(
     "search_procedures",

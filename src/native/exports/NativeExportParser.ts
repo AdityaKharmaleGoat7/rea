@@ -10,7 +10,7 @@ import { architectureForElfMachine } from "../metadata/ElfImage.js";
 import { isUtf8 } from "node:buffer";
 import { readElfStringBytes, readElfSymbol } from "../metadata/ElfSymbol.js";
 import {
-  readNativeDirectoryFromBuffer,
+  readElfDirectoryFromBuffer,
   type NativeSection,
 } from "../metadata/NativeSectionDirectory.js";
 import { readPeImage } from "../metadata/PeImage.js";
@@ -72,7 +72,7 @@ const coverage = (
     ? { status: "complete", reason: null, examined_entries: examined, exports }
     : {
         status: "partial",
-        reason: `${String(issues.length)} export table issue(s) left entries unreported; see issues`,
+        reason: `${String(issues.length)} export table issue(s) affect reported rows or metadata; see issues`,
         examined_entries: examined,
         exports,
       };
@@ -98,7 +98,7 @@ const parsePeExports = (bytes: Buffer, artifact: Artifact): NativeExports => {
     architecture: image.architecture,
     bits: image.bits,
   };
-  if (directory === undefined || directory.virtual_address === 0)
+  if (directory === undefined || directory.address === 0)
     return {
       ...result,
       export_directory: null,
@@ -129,7 +129,7 @@ const parsePeExports = (bytes: Buffer, artifact: Artifact): NativeExports => {
     return value.toString("latin1");
   };
 
-  const header = map(directory.virtual_address, PE_EXPORT_DIRECTORY_BYTES);
+  const header = map(directory.address, PE_EXPORT_DIRECTORY_BYTES);
   const ordinalBase = reader.u32(header + 16);
   const functionCount = reader.u32(header + 20);
   const nameCount = reader.u32(header + 24);
@@ -180,7 +180,7 @@ const parsePeExports = (bytes: Buffer, artifact: Artifact): NativeExports => {
     }
   }
 
-  const forwarderEnd = directory.virtual_address + directory.size;
+  const forwarderEnd = directory.address + directory.size;
   const retain = createRetention();
   const exports: PeExport[] = [];
   for (let index = 0; index < functionCount; index++) {
@@ -189,7 +189,7 @@ const parsePeExports = (bytes: Buffer, artifact: Artifact): NativeExports => {
     if (rva === 0) continue;
     const ordinal = ordinalBase + index;
     let target: Pick<PeExport, "address" | "forwarder">;
-    if (rva >= directory.virtual_address && rva < forwarderEnd) {
+    if (rva >= directory.address && rva < forwarderEnd) {
       try {
         target = { address: null, forwarder: cString(rva) };
       } catch (cause) {
@@ -216,7 +216,7 @@ const parsePeExports = (bytes: Buffer, artifact: Artifact): NativeExports => {
   return {
     ...result,
     export_directory: {
-      rva: directory.virtual_address,
+      rva: directory.address,
       size: directory.size,
       dll_name: dllName,
       ordinal_base: ordinalBase,
@@ -449,7 +449,7 @@ const readVersionNames = (
 
 /** Read defined exported entries of `.dynsym` with their symbol versions. */
 const parseElfExports = (bytes: Buffer, artifact: Artifact): NativeExports => {
-  const directory = readNativeDirectoryFromBuffer(bytes, "elf");
+  const directory = readElfDirectoryFromBuffer(bytes);
   const reader = new BinaryReader(bytes, directory.little);
   const result = {
     artifact,

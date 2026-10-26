@@ -140,14 +140,18 @@ export const retryRegularFileCleanupFailures = async (
 ): Promise<{
   readonly primary: unknown;
   readonly failures: readonly RegularFileCleanupFailure[];
+  readonly cleanupLeases: readonly AnalysisCleanupLease[];
   readonly cleanup?: AnalysisCleanupObservation;
 }> => {
   const failures: RegularFileCleanupFailure[] = [];
+  const cleanupLeases = new Set<AnalysisCleanupLease>();
   const observations: AnalysisCleanupObservation[] = [];
   let current = failure;
   let primary: unknown;
   for (;;) {
     const retried = await retryRegularFileCleanup(current, resources);
+    if (retried.cleanupLease !== undefined)
+      cleanupLeases.add(retried.cleanupLease);
     failures.push(retried.failure ?? current);
     if (retried.cleanup !== undefined) observations.push(retried.cleanup);
     primary =
@@ -165,6 +169,7 @@ export const retryRegularFileCleanupFailures = async (
   return {
     primary,
     failures,
+    cleanupLeases: [...cleanupLeases],
     ...(observations.length === 0
       ? {}
       : {
@@ -201,9 +206,8 @@ export const withRegularFileCompletion = async <Value>(
           ...(signal === undefined ? {} : { signal }),
           symlinks: options.symlinks ?? "follow",
         },
-        async (handle) => {
+        async ({ handle, initial: stats }) => {
           admitted = handle;
-          const stats = await handle.stat();
           assertRegularFileActive(signal);
           const value = await read(handle, stats);
           assertRegularFileActive(signal);

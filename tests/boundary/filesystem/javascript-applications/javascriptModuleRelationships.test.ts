@@ -13,8 +13,8 @@ import { primitiveCandidateExpansionExpression } from "../../../fixtures/javascr
 import { scanCanonicalArtifactInventory } from "../../../fixtures/artifactInventory.js";
 import { readJavaScriptArtifactFiles } from "../../../support/javascriptApplicationScope.js";
 import { createJavaScriptArtifactReader } from "../../../../src/artifacts/javascript/JavaScriptArtifactReader.js";
-import { analyzeJavaScriptArtifactFiles } from "../../../../src/application/javascript/JavaScriptArtifactAnalysis.js";
-import { buildJavaScriptArtifactGraph } from "../../../../src/application/javascript/JavaScriptArtifactGraphBuilder.js";
+import { analyzeArtifactFiles } from "../../../fixtures/javascriptArtifactAnalysis.js";
+import { immutableArtifactGraph } from "../../../fixtures/javascriptArtifactGraph.js";
 
 import {
   findExportNode,
@@ -29,11 +29,8 @@ const relationshipGraph = async (root: string) => {
   const reader = createJavaScriptArtifactReader(root, "directory");
   try {
     const files = await readJavaScriptArtifactFiles(reader, snapshot);
-    return buildJavaScriptArtifactGraph(
-      snapshot,
-      files,
-      analyzeJavaScriptArtifactFiles(files),
-    );
+    const { analysis } = await analyzeArtifactFiles(files);
+    return await immutableArtifactGraph(snapshot, files, analysis);
   } finally {
     await reader.close();
   }

@@ -96,12 +96,91 @@ const textCoverage = z.strictObject({
   text: z.string(),
   reported_total_bytes: z.int().nonnegative().nullable(),
 });
+
+const manifestComponent = z.strictObject({
+  kind: z.enum([
+    "activity",
+    "activity-alias",
+    "service",
+    "receiver",
+    "provider",
+  ]),
+  declared_name: z.string(),
+  name: z.string(),
+  exported: z.boolean().nullable(),
+  exported_default: z.boolean().nullable(),
+  permission: z.string().nullable(),
+  permission_source: z.enum(["component", "application", "none", "unknown"]),
+  intent_filter_count: z.number().int().nonnegative(),
+  actions: z.array(z.string()),
+  categories: z.array(z.string()),
+  foreground_service_type: z.string().nullable(),
+  authorities: z.array(z.string()).nullable(),
+  target_activity: z.string().nullable(),
+});
+
+/**
+ * Static component projection of the decoded manifest. The export default is
+ * Android's documented rule for an absent android:exported when one applies;
+ * null also means the default is unknown or an explicit declaration is
+ * required. This is not a merged-manifest or runtime observation.
+ */
+const manifestComponents = z.strictObject({
+  status: z.enum(["complete", "partial", "unavailable"]),
+  items: z.array(manifestComponent),
+  limitations: z.array(z.string()),
+});
 /** A DEX prototype; hex parentheses also keep the advertised class valid in v mode. */
 export const dexDescriptorSchema = z
   .string()
   .regex(
     /^\((?:\[*(?:[ZBSCIJFD]|L[^;\x28\x29]+;))*\)(?:V|\[*(?:[ZBSCIJFD]|L[^;\x28\x29]+;))$/u,
   );
+
+const integral = <Type extends string>(type: Type, min: number, max: number) =>
+  z.strictObject({
+    type: z.literal(type),
+    value: z.int().min(min).max(max),
+  });
+const LONG_MIN = -(2n ** 63n);
+const LONG_MAX = 2n ** 63n - 1n;
+/** Finite text must name a value of the given width; only zero text may round to zero. */
+const floating = <Type extends "float" | "double">(
+  type: Type,
+  round: (value: number) => number,
+) =>
+  z.strictObject({
+    type: z.literal(type),
+    value: z
+      .string()
+      .regex(/^(?:NaN|-?Infinity|-?\d+\.\d+(?:E-?\d+)?)$/u)
+      .refine((text) => {
+        if (/^(?:NaN|-?Infinity)$/u.test(text)) return true;
+        const rounded = round(Number(text));
+        return (
+          Number.isFinite(rounded) &&
+          (rounded !== 0 || /^-?0\.0+(?:E-?\d+)?$/u.test(text))
+        );
+      }),
+  });
+/** A static final field's DEX static value; wide and floating values keep Java text. */
+export const dexStaticValueSchema = z.discriminatedUnion("type", [
+  z.strictObject({ type: z.literal("boolean"), value: z.boolean() }),
+  integral("byte", -128, 127),
+  integral("short", -32_768, 32_767),
+  integral("char", 0, 65_535),
+  integral("int", -2_147_483_648, 2_147_483_647),
+  z.strictObject({
+    type: z.literal("long"),
+    value: z
+      .string()
+      .regex(/^(?:0|-?[1-9]\d*)$/u)
+      .refine((text) => BigInt(text) >= LONG_MIN && BigInt(text) <= LONG_MAX),
+  }),
+  floating("float", Math.fround),
+  floating("double", (value) => value),
+  z.strictObject({ type: z.literal("string"), value: z.string() }),
+]);
 
 const method = z.strictObject({
   name: z.string(),
@@ -131,6 +210,15 @@ export const androidResultSchemas = {
     target_sdk: z.string().nullable(),
     permissions: z.array(z.string()),
     manifest: textCoverage,
+    // Evidence retained before the component projection existed re-parses
+    // with an explicit unavailable inventory; current results always carry it.
+    components: manifestComponents.default(() => ({
+      status: "unavailable" as const,
+      items: [],
+      limitations: [
+        "This Evidence predates the manifest component projection; run inspect_android_package again to obtain it.",
+      ],
+    })),
     class_count: z.int().nonnegative(),
     resource_count: z.int().nonnegative(),
     signature_verification: z.literal("not_performed"),
@@ -153,7 +241,12 @@ export const androidResultSchemas = {
     class_name: z.string(),
     methods: z.array(method),
     fields: z.array(
-      z.strictObject({ name: z.string(), reported_type: z.string() }),
+      z.strictObject({
+        name: z.string(),
+        reported_type: z.string(),
+        /** Null unless a static final field encodes a supported non-null value; initializers are not applied. */
+        dex_static_value: dexStaticValueSchema.nullable(),
+      }),
     ),
     inner_classes: z.array(z.string()),
   }),

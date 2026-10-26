@@ -11,9 +11,11 @@ import { constants } from "node:fs";
 import { access, stat } from "node:fs/promises";
 import { ArtifactResourceScope } from "../artifacts/ArtifactResourceScope.js";
 import type { RetainedResourceScope } from "./AnalysisProvider.js";
-import { nativeAnalysisConfigurationError } from "../config/parseConfig.js";
+import {
+  inspectNativeAnalysisConfiguration,
+  type NativeAnalysisConfigurationInspection,
+} from "../config/parseConfig.js";
 import { homeDirectoryFromEnvironment } from "../config/homeDirectory.js";
-import type { ConfigurationSettingIssue } from "../domain/configurationErrors.js";
 import { snapshotEnvironment } from "../process/snapshotEnvironment.js";
 import { join } from "node:path";
 
@@ -108,12 +110,11 @@ export interface DoctorHost {
   readonly runtime: JavaScriptRuntime;
   readonly homeDirectory: string;
   readonly configuredHopperPath?: string;
-  readonly configuredHopperStartupTimeout?: string;
   /**
    * Settings `parseConfig` rejects before native analysis starts.
    * Undefined means this host did not run that admission.
    */
-  readonly configurationIssues?: readonly ConfigurationSettingIssue[];
+  readonly nativeConfiguration?: NativeAnalysisConfigurationInspection;
   readonly configuredIlspyCmdPath?: string;
   macosVersion(): Promise<string | undefined>;
   linuxDistribution(): Promise<LinuxDistribution | undefined>;
@@ -140,7 +141,9 @@ export interface DoctorHost {
     clientIds: readonly string[] | undefined,
   ): Promise<InstalledSkillIdentity | undefined>;
   close?(): Promise<string | undefined>;
-  clientRegistrations?(): Promise<readonly ClientRegistrationStatus[]>;
+  clientRegistrations?(
+    selectedClientIds?: readonly string[],
+  ): Promise<readonly ClientRegistrationStatus[]>;
   ilspyCmdVersion?(path: string): Promise<string | undefined>;
 }
 
@@ -368,7 +371,7 @@ const collectDoctorIdentity = async (
   readonly value: DoctorIdentity;
 }> => {
   const installationPaths = (await host.installationPaths?.()) ?? [];
-  const registrations = (await host.clientRegistrations?.()) ?? [];
+  const registrations = (await host.clientRegistrations?.(scope.clients)) ?? [];
   const skillClientIds =
     scope.skill_clients ??
     (scope.clients.length > 0 ? scope.clients : undefined);
@@ -539,7 +542,7 @@ export const systemDoctorHost = (
   const platform = options.platform ?? process.platform;
   const architecture = options.architecture ?? process.arch;
   const environment = options.environment ?? process.env;
-  const configurationError = nativeAnalysisConfigurationError(
+  const nativeConfiguration = inspectNativeAnalysisConfiguration(
     snapshotEnvironment(environment, platform),
   );
   const hostExecFileOutput = options.execFileOutput ?? execFileOutput;
@@ -576,13 +579,7 @@ export const systemDoctorHost = (
     ...(environment.HOPPER_LAUNCHER_PATH === undefined
       ? {}
       : { configuredHopperPath: environment.HOPPER_LAUNCHER_PATH }),
-    ...(environment.REA_HOPPER_STARTUP_TIMEOUT_MS === undefined
-      ? {}
-      : {
-          configuredHopperStartupTimeout:
-            environment.REA_HOPPER_STARTUP_TIMEOUT_MS,
-        }),
-    configurationIssues: configurationError?.settings ?? [],
+    nativeConfiguration,
     ...(environment.REA_ILSPY_CMD_PATH === undefined
       ? {}
       : { configuredIlspyCmdPath: environment.REA_ILSPY_CMD_PATH }),
@@ -747,11 +744,12 @@ export const systemDoctorHost = (
         throw failure;
       }
     },
-    clientRegistrations: () =>
+    clientRegistrations: (selectedClientIds) =>
       readClientRegistrationStatuses(homeDirectory, undefined, {
         platform,
         environment,
         resources,
+        ...(selectedClientIds === undefined ? {} : { selectedClientIds }),
         ...(resolveProviderRequestBudget === undefined
           ? {}
           : {
@@ -766,7 +764,9 @@ const readMacosVersion = async (
   options: { readonly env: NodeJS.ProcessEnv },
 ): Promise<string | undefined> => {
   try {
-    return (await run("sw_vers", ["-productVersion"], options)).stdout.trim();
+    return (
+      await run("/usr/bin/sw_vers", ["-productVersion"], options)
+    ).stdout.trim();
   } catch (cause: unknown) {
     // best-effort cleanup: optional OS version probing; failure means unknown.
     void cause;

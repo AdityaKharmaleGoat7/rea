@@ -1,7 +1,7 @@
 <div align="center">
 
 [English](../../README.md) · [简体中文](README_zh.md) · [繁體中文](README_zh-TW.md) · [日本語](README_ja.md) · [한국어](README_ko.md) · [Türkçe](README_tr.md) · [Русский](README_ru.md) · **Tiếng Việt** · [ไทย](README_th.md) · [Deutsch](README_de.md) · [Español](README_es.md) · [Français](README_fr.md) · [Українська](README_uk.md) · [Polski](README_pl.md) · [Português (Brasil)](README_pt-BR.md) · [العربية](README_ar.md) · [فارسی](README_fa.md) · [Bahasa Indonesia](README_id.md) · [Italiano](README_it.md)
-· [Ελληνικά](README_el.md) · [മലയാളം](README_ml.md) · [Roman Urdu](README_ur-Latn.md)
+· [Ελληνικά](README_el.md) · [മലയാളം](README_ml.md) · [Roman Urdu](README_ur-Latn.md) · [Română](README_ro.md)
 
 # REA: Kỹ thuật dịch ngược cho mọi thứ
 
@@ -20,7 +20,7 @@
 
 **[Trang web](https://rea.tools/vi/) · [Hướng dẫn](https://rea.tools/vi/guides/) · [Các nghiên cứu điển hình](https://rea.tools/vi/showcase/)**
 
-[Bắt đầu nhanh](#bắt-đầu-nhanh) · [Cách REA hoạt động](#cách-rea-hoạt-động) · [Những gì bạn có thể phân tích](#những-gì-bạn-có-thể-phân-tích) · [Các nghiên cứu điển hình](#các-nghiên-cứu-điển-hình) · [Câu hỏi thường gặp](#câu-hỏi-thường-gặp) · [Công cụ GNU objdump và Rizin](../reverse-engineering-tools.md) · [Tài liệu](#tài-liệu)
+[Bắt đầu nhanh](#bắt-đầu-nhanh) · [Cách REA hoạt động](#cách-rea-hoạt-động) · [Những gì bạn có thể phân tích](#những-gì-bạn-có-thể-phân-tích) · [Các nghiên cứu điển hình](#các-nghiên-cứu-điển-hình) · [Xây dựng môi trường RL](#build-rl-environments) · [Câu hỏi thường gặp](#câu-hỏi-thường-gặp) · [Công cụ GNU objdump và Rizin](../reverse-engineering-tools.md) · [Tài liệu](#tài-liệu)
 
 <code>npx rea-agents setup</code>
 
@@ -158,7 +158,9 @@ REA yêu cầu Node.js 22.x (>=22.23.4), 24.x (>=24.22.1) hoặc 26+ (>=26.12.1)
 | PE certificates                   | Authenticode WIN_CERTIFICATE entries and PKCS#7 signer/X.509 identity fields                                    | Built-in static PE inspection; [PE certificates](../pe-certificates.md)                                                                         |
 | PE imports                        | Import and delay-load DLL names, ordinals, IAT RVAs and pefile import hash                                      | Built-in static PE inspection; [PE imports](../pe-imports.md)                                                                                   |
 | ELF notes                         | PT_NOTE/SHT_NOTE owners, types, GNU build-id and ABI-tag fields                                                 | Built-in static ELF inspection; [ELF notes](../elf-notes.md)                                                                                    |
+| Linux kernel modules              | .modinfo keys, __versions CRCs, this_module presence, and signature trailer                                     | Built-in static ELF inspection; [kernel modules](../kernel-modules.md)                                                                          |
 | Erlang BEAM                       | IFF chunks, atoms, exports, and tables                                                                          | Built-in static BEAM inspection; [Erlang BEAM](../erlang-beam.md)                                                                               |
+| Apple IPS crashes                 | .ips metadata, threads, images, registers and crash classes                                                     | Built-in static JSON inspection; [Apple IPS](../apple-ips.md)                                                                                   |
 | Sự cố Linux đã ghi lại            | Bản ghi note thô, thanh ghi/tín hiệu của mọi luồng được ghi lại và các ứng viên ánh xạ tùy chọn                 | pwntools do bên gọi cung cấp trên Linux x64; GDB/pwndbg tùy chọn; [sự cố đã ghi lại](../recorded-crashes.md)                                    |
 | Thư mục cài đặt ứng dụng máy tính | Các runtime có khả năng được dùng, tệp bằng chứng, dấu hiệu thành phần và bước tiếp theo                        | Kiểm tra thư mục và phần đầu tệp có giới hạn；[Ứng dụng máy tính](../desktop-applications.md)                                                   |
 | JavaScript / Electron             | Mô-đun, các khai báo import, source map, tuyến, IPC và quan hệ với tiện ích mở rộng mã máy                      | Node.js và npm; [phân tích ứng dụng](../javascript-application-workflows.md); Linux: procps `ps`                                                |
@@ -221,7 +223,50 @@ Kiểm tra các lệnh 16 bit của trò chơi PC-98 gốc, khôi phục phép t
 
 [Đọc nghiên cứu điển hình](https://rea.tools/vi/showcase/th04/) · [Kho mã tái tạo](https://github.com/N0zoM1z0/th04)
 
+### Xây dựng môi trường RL bằng REA
+
+Ghi phiên ứng dụng web, chuyển API thành công cụ và xuất môi trường mà tác tử AI có thể dùng. Chạy bằng AgentEnv, rồi thêm tác vụ và kiểm tra phần thưởng để huấn luyện RL hoặc đánh giá.
+
+[Hướng dẫn xây dựng môi trường](https://rea.tools/guides/rl-environments/) ·
+[Xem bản demo trên X](https://x.com/reatools/status/2112574822584918075?s=20)
+
 Nếu bạn dùng REA cho một mục tiêu thú vị, chúng tôi muốn biết. Chia sẻ trường hợp của bạn qua [issue](https://github.com/morluto/rea/issues) hoặc [pull request](https://github.com/morluto/rea/pulls), nêu mục tiêu, câu hỏi, cách REA giúp bạn và những gì tìm được.
+
+<a id="build-rl-environments"></a>
+
+## Xây dựng môi trường RL
+
+Tạo môi trường cục bộ để tác tử AI luyện các tác vụ như tìm issue hoặc tạo thư mục mà không cần chạy ứng dụng gốc. Dùng môi trường này cho học tăng cường (RL) hoặc để kiểm tra khả năng hoàn thành tác vụ của tác tử.
+
+REA biến các yêu cầu và phản hồi API đã ghi thành công cụ mà tác tử có thể gọi. Môi trường dùng dữ liệu đã ghi và chỉ hỗ trợ thay đổi khi bản ghi xác nhận tác động của thay đổi đó.
+
+Sau khi thiết lập REA trong tác tử, thay URL và các tác vụ thư mục bên dưới bằng thông tin của bạn:
+
+```text
+Dùng REA xây dựng môi trường RL từ ứng dụng web thử nghiệm của tôi tại
+http://127.0.0.1:3000.
+Bao gồm liệt kê, tạo, đổi tên và xóa thư mục. Có thể tạo và xóa
+thư mục thử nghiệm nhưng không thay đổi dữ liệu có sẵn.
+Lưu vào thư mục my-env, kiểm tra thao tác nào hoạt động và cho tôi biết cách chạy.
+```
+
+<details>
+<summary>Dùng dòng lệnh</summary>
+
+Dùng các lệnh này nếu đã có tệp ghi lại yêu cầu và phản hồi của ứng dụng trong trình duyệt. Để chạy môi trường tạo ra, bạn cũng cần AgentEnv và Docker.
+
+```sh
+rea environment-build ./session.har ./my-env --name my-env --json
+agent-env run ./my-env
+```
+
+</details>
+
+REA xuất môi trường chạy được cùng bài kiểm tra cơ bản để xác nhận môi trường khởi động và phản hồi. Kết nối với framework RL để đặt mục tiêu tác vụ, thêm kiểm tra phần thưởng và chạy huấn luyện.
+
+[Hướng dẫn xây dựng môi trường](https://rea.tools/guides/rl-environments/) ·
+[Tài liệu tham chiếu môi trường](../agent-environments.md) ·
+[Xem bản demo trên X](https://x.com/reatools/status/2112574822584918075?s=20)
 
 ## Câu hỏi thường gặp
 

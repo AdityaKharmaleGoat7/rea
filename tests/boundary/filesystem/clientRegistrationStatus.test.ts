@@ -6,7 +6,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
 import { clearClientLocationEnvironment } from "../../fixtures/clientEnvironment.js";
 
-import { readClientRegistrationStatuses } from "../../../src/application/ClientRegistrationStatus.js";
+import {
+  readClientRegistrationInspections,
+  readClientRegistrationStatuses,
+} from "../../../src/application/ClientRegistrationStatus.js";
 import { configureClientConfiguration } from "../../../src/application/SetupClientConfiguration.js";
 import { classifyClientRegistrationCommand } from "../../../src/application/ClientRegistrationIdentity.js";
 import { existingMaintenanceScope } from "../../../src/application/UpdateMaintenance.js";
@@ -180,6 +183,14 @@ describe("client registration launcher identity", () => {
       state: "unknown",
       remediation: expect.stringContaining("registration was retained"),
     });
+    expect(status).not.toHaveProperty("commandIdentity");
+    expect(await readClientRegistrationInspections(home, "")).toEqual([
+      expect.objectContaining({
+        status,
+        activation: "enabled",
+        commandIdentity: "unknown",
+      }),
+    ]);
   });
 
   it("does not use the REA process cwd to resolve a client's relative launcher path", async () => {
@@ -230,7 +241,9 @@ describe("client registration launcher identity", () => {
       state: "unknown",
     });
   });
+});
 
+describe("client registration package version identity", () => {
   it.each([
     ["4.1.0", true],
     ["v4.1.0", false],
@@ -574,6 +587,78 @@ describe("Node-wrapped registration policy", () => {
       ]);
     },
   );
+});
+
+describe("explicit client selection", () => {
+  // A regular file where the shared directory belongs fails every access
+  // probe (ENOTDIR on POSIX, ENOENT on Windows), which is the shape an ACL
+  // failure takes for automatic discovery.
+  const unreachableSharedParent = async (): Promise<string> => {
+    const home = await createTestTempDirectory("rea-selected-unreachable-");
+    await writeFile(join(home, ".agents"), "not a directory");
+    return home;
+  };
+
+  it("inspects a selected client whose config location cannot be probed", async () => {
+    const home = await unreachableSharedParent();
+
+    const statuses = await readClientRegistrationStatuses(
+      home,
+      "/current/rea",
+      {
+        environment: {},
+        selectedClientIds: ["freebuff"],
+      },
+    );
+
+    // Before explicit selection authorised the read, every probe failed and
+    // the client was omitted, so doctor reported "not detected" instead.
+    expect(statuses).toEqual([
+      expect.objectContaining({
+        client: "freebuff",
+        config_path: join(home, ".agents", "mcp.json"),
+        command: [],
+      }),
+    ]);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "reports an unreadable selected config instead of omitting the client",
+    async () => {
+      const home = await unreachableSharedParent();
+
+      const statuses = await readClientRegistrationStatuses(
+        home,
+        "/current/rea",
+        {
+          environment: {},
+          selectedClientIds: ["freebuff"],
+        },
+      );
+
+      expect(statuses).toEqual([
+        expect.objectContaining({
+          client: "freebuff",
+          state: "invalid",
+          remediation: expect.stringContaining("could not be read"),
+        }),
+      ]);
+    },
+  );
+
+  it("keeps automatic discovery probing when no client is selected", async () => {
+    const home = await unreachableSharedParent();
+
+    const statuses = await readClientRegistrationStatuses(
+      home,
+      "/current/rea",
+      {
+        environment: {},
+      },
+    );
+
+    expect(statuses.map(({ client }) => client)).not.toContain("freebuff");
+  });
 });
 
 it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(

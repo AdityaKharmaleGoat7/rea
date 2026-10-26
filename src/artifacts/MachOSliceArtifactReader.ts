@@ -1,5 +1,4 @@
 import { assertArtifactReadActive } from "./ArtifactFileOperation.js";
-import { lstat } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { Readable } from "node:stream";
 
@@ -13,8 +12,10 @@ import {
   type LipoArchitecture,
 } from "../native/parsers/lipo.js";
 import type { MachoSlice } from "../domain/apple/dylibResolution.js";
-import { machoCpuSubtypeBase } from "../domain/apple/machoCpuIdentity.js";
-import { OwnedFileHandle } from "../filesystem/OwnedFileHandle.js";
+import {
+  machoArchitectureFamily,
+  machoCpuSubtypeBase,
+} from "../domain/apple/machoCpuIdentity.js";
 import { readMachoImage, type ReadAt } from "./apple/MachoLoadCommandReader.js";
 import {
   ArtifactReaderFailure,
@@ -24,25 +25,17 @@ import {
   type ArtifactReader,
 } from "./ArtifactReader.js";
 import { streamChunkToBuffer } from "./StreamBytes.js";
-import {
-  NonRegularFileReadError,
-  RegularFileAdmissionFailure,
-  openRegularFile,
-  sameRegularFileState,
-  type StableRegularFileDescriptor,
-} from "../filesystem/RegularFile.js";
+import type { StableRegularFileDescriptor } from "../filesystem/RegularFile.js";
 import { readArtifactFileChunks } from "./readArtifactFileChunks.js";
+import { ArtifactFileSource } from "./ArtifactFileSource.js";
 
 /** Read-only universal Mach-O slice reader backed by native lipo metadata. */
 export class MachOSliceArtifactReader implements ArtifactReader {
   readonly format = "file" as const;
   #command: ArtifactCommand | undefined;
-  #source: StableRegularFileDescriptor | undefined;
-  #ownedSource: OwnedFileHandle | undefined;
-  #pendingSource: Promise<StableRegularFileDescriptor> | undefined;
+  readonly #source: ArtifactFileSource;
   readonly #entries = new Map<string, ArtifactEntry>();
   readonly #pendingCommands = new Set<Promise<unknown>>();
-  readonly #ownsSource: boolean;
   #closed = false;
   #closePromise: Promise<void> | undefined;
 
@@ -54,14 +47,13 @@ export class MachOSliceArtifactReader implements ArtifactReader {
     ),
     source?: StableRegularFileDescriptor,
   ) {
-    this.#source = source;
-    this.#ownsSource = source === undefined;
+    this.#source = new ArtifactFileSource(path, "Universal Mach-O", source);
   }
 
   async *entries(signal?: AbortSignal): AsyncIterable<ArtifactEntry> {
     this.#entries.clear();
     const source = await this.#ensureSource();
-    await this.#verifySource(source);
+    await this.#source.readSelectedPath();
     if (this.#closed)
       throw new ArtifactReaderFailure(
         "unavailable",
@@ -113,7 +105,7 @@ export class MachOSliceArtifactReader implements ArtifactReader {
       exit_code: captured.value.exitCode,
       effects: ["read"],
     };
-    await this.#verifySource(source);
+    await this.#source.readSelectedPath();
     const fileSize = source.initial.size;
     const parsed = parseLipoOutputResult(captured.value.stdout, this.path);
     if (!parsed.ok)
@@ -125,7 +117,7 @@ export class MachOSliceArtifactReader implements ArtifactReader {
     const lipo = parsed.value;
     const { architectures } = lipo;
     const structural = await readStructuralSlices(source.handle, fileSize);
-    await this.#verifySource(source);
+    await this.#source.readSelectedPath();
     if (structural.status === "malformed")
       throw new ArtifactReaderFailure(
         "integrity",
@@ -303,7 +295,7 @@ export class MachOSliceArtifactReader implements ArtifactReader {
         "Invalid Mach-O slice byte range",
       );
     const source = await this.#ensureSource();
-    await this.#verifySource(source);
+    await this.#source.readSelectedPath();
     if (
       !Number.isSafeInteger(offset + size) ||
       offset + size > source.initial.size
@@ -317,7 +309,7 @@ export class MachOSliceArtifactReader implements ArtifactReader {
       end: offset + size - 1,
       ...(signal === undefined ? {} : { signal }),
     });
-    const verifySource = () => this.#verifySource(source);
+    const verifySource = () => this.#source.readSelectedPath();
     let validatingSource = false;
     const completionFailure = (): ArtifactReaderFailure | undefined => {
       const coverage = sourceStream.readCoverage();
@@ -453,7 +445,7 @@ export class MachOSliceArtifactReader implements ArtifactReader {
       );
     }
     try {
-      await this.#closeSource();
+      await this.#source.close();
     } catch (cause: unknown) {
       if (cleanup === undefined) throw cause;
       throw ArtifactReaderFailure.withCleanup(cause, cleanup);
@@ -472,79 +464,13 @@ export class MachOSliceArtifactReader implements ArtifactReader {
         "unavailable",
         "Universal Mach-O reader is closed",
       );
-    if (this.#source !== undefined) return this.#source;
-    this.#pendingSource ??= this.#acquireSource();
-    const source = await this.#pendingSource;
+    const source = await this.#source.read();
     if (this.#closed)
       throw new ArtifactReaderFailure(
         "unavailable",
         "Universal Mach-O reader closed during source acquisition",
       );
     return source;
-  }
-
-  async #acquireSource(): Promise<StableRegularFileDescriptor> {
-    let handle: FileHandle;
-    try {
-      handle = await openRegularFile(this.path, { symlinks: "reject" });
-    } catch (cause: unknown) {
-      if (!(cause instanceof RegularFileAdmissionFailure)) throw cause;
-      this.#ownedSource = cause.owner;
-      const primary =
-        cause.cause instanceof NonRegularFileReadError
-          ? new ArtifactReaderFailure(
-              "format",
-              `Universal Mach-O source is not a regular file: ${this.path}`,
-              { cause: cause.cause },
-            )
-          : cause.cause;
-      throw ArtifactReaderFailure.withCleanup(
-        primary,
-        ArtifactReaderFailure.cleanupObservation(cause.cleanupCause, this.path),
-      );
-    }
-    const owner = new OwnedFileHandle(handle);
-    this.#ownedSource = owner;
-    try {
-      const initial = await handle.stat();
-      const source = { handle, initial };
-      this.#source = source;
-      return source;
-    } catch (cause: unknown) {
-      try {
-        await owner.close();
-        this.#ownedSource = undefined;
-      } catch (cleanupCause: unknown) {
-        throw ArtifactReaderFailure.withCleanup(
-          cause,
-          ArtifactReaderFailure.cleanupObservation(cleanupCause, this.path),
-        );
-      }
-      throw cause;
-    }
-  }
-
-  async #closeSource(): Promise<void> {
-    await this.#pendingSource?.catch(() => undefined);
-    if (!this.#ownsSource || this.#ownedSource === undefined) return;
-    await this.#ownedSource.close();
-    this.#ownedSource = undefined;
-    this.#source = undefined;
-  }
-
-  async #verifySource(source: StableRegularFileDescriptor): Promise<void> {
-    const [opened, currentPath] = await Promise.all([
-      source.handle.stat(),
-      lstat(this.path),
-    ]);
-    if (
-      !sameRegularFileState(source.initial, opened) ||
-      !sameRegularFileState(source.initial, currentPath)
-    )
-      throw new ArtifactReaderFailure(
-        "integrity",
-        `Universal Mach-O source changed during inventory: ${this.path}`,
-      );
   }
 }
 
@@ -630,10 +556,10 @@ const lipoNameMatches = (reported: string, observed: MachoSlice): boolean => {
       ARM_SUBTYPES[reported] ===
       machoCpuSubtypeBase(observed.fat_cpu_subtype ?? observed.cpu_subtype)
     );
-  // Newer lipo names pointer-auth ABI variants arm64e.<variant>. Their
-  // physical type/subtype, range and alignment are still compared separately.
+  if (reported === machoArchitectureFamily(observed.architecture)) return true;
+  // Retain lipo's capability-variant spelling; physical identity is checked separately.
   return (
-    observed.architecture === "arm64e" &&
+    machoArchitectureFamily(observed.architecture) === "arm64e" &&
     /^arm64e\.[A-Za-z0-9_]+$/u.test(reported)
   );
 };

@@ -7,16 +7,13 @@ import {
   FULL_CATALOG_IDENTITY,
   createCatalogIdentity,
 } from "../catalogIdentity.js";
-import type { ToolResultDelivery } from "./toolResult.js";
+import type { ToolResultDelivery } from "./ToolResultDelivery.js";
 import {
   EvidenceMcpServerCore,
   type CompactInputSchemaPresentation,
 } from "./EvidenceMcpServerCore.js";
 
-export {
-  forgetPendingMcpRequest,
-  type CompactInputSchemaPresentation,
-} from "./EvidenceMcpServerCore.js";
+export type { CompactInputSchemaPresentation } from "./EvidenceMcpServerCore.js";
 
 /** Canonical composition retains the constructor's existing identity defaults. */
 export class EvidenceMcpServer extends EvidenceMcpServerCore {

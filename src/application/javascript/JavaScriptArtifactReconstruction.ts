@@ -1,3 +1,4 @@
+import type { AnalysisSettingValues } from "../../domain/analysisSettings.js";
 import {
   DEFAULT_ASAR_HEADER_ADMISSION,
   type AsarHeaderAdmission,
@@ -20,8 +21,11 @@ import { createJavaScriptArtifactReader as createReader } from "../../artifacts/
 import type { JavaScriptApplicationGraph } from "../../domain/javascript/javascriptApplicationGraph.js";
 import type { JavaScriptSemanticGraph } from "../../domain/javascript/javascriptSemanticGraph.js";
 import type { JavaScriptSourceSelection } from "../../domain/javascript/javascriptSourceSelection.js";
-import type { ElectronBoundarySummary } from "../../domain/javascript/javascriptApplicationAnalysis.js";
-import { parseOwnedJavaScriptApplicationAnalysisSteps } from "../../domain/javascript/javascriptApplicationAnalysis.js";
+import {
+  parseOwnedJavaScriptApplicationAnalysisSteps,
+  type AnalyzeJavaScriptApplicationInput,
+  type ElectronBoundarySummary,
+} from "../../domain/javascript/javascriptApplicationAnalysis.js";
 import { AnalysisError } from "../../domain/analysisErrorBase.js";
 import { analysisErrorWithCleanupFailure } from "../../domain/analysisErrorCleanup.js";
 import { ArtifactOperationError } from "../../domain/artifactOperationError.js";
@@ -38,10 +42,6 @@ import { JAVASCRIPT_ANALYSIS_RESOURCE_DEFAULTS } from "../../domain/javascript/j
 import { createOwnedJavaScriptApplicationEvidenceCooperatively } from "./JavaScriptApplicationEvidence.js";
 import { readJavaScriptArtifactFiles } from "../../artifacts/javascript/JavaScriptArtifactFiles.js";
 import { buildImmutableJavaScriptArtifactGraphSteps } from "./JavaScriptArtifactGraphBuilder.js";
-import {
-  javascriptArtifactReconstructionInputSchema,
-  type JavaScriptArtifactReconstructionInput,
-} from "./JavaScriptArtifactReconstructionInput.js";
 import { scanCanonicalArtifactInventoryInScope } from "../../artifacts/inventory/scanCanonical.js";
 import { createJavaScriptNextAppContext } from "./JavaScriptNextAppContext.js";
 import { summarizeElectronBoundaries } from "./ElectronBoundaryAnalysis.js";
@@ -80,13 +80,14 @@ export interface JavaScriptArtifactReconstructionResult {
   readonly limitations: readonly string[];
 }
 
-/** Reconstruct one local ASAR or extracted directory without executing code. */
+/** Reconstruct a parsed local ASAR/directory request without executing code. */
 export const reconstructJavaScriptArtifact = async (
-  rawInput: unknown,
+  input: AnalyzeJavaScriptApplicationInput,
   scope: ArtifactResourceScope,
   signal?: AbortSignal,
   progress?: ProgressReporter,
   asarHeaderAdmission: AsarHeaderAdmission = DEFAULT_ASAR_HEADER_ADMISSION,
+  overrides?: Readonly<Partial<AnalysisSettingValues>>,
 ): Promise<JavaScriptArtifactReconstructionResult> =>
   scope.run(async () => {
     const reportPhase = async (
@@ -101,7 +102,6 @@ export const reconstructJavaScriptArtifact = async (
       });
       await checkpointJavaScriptAnalysis(signal);
     };
-    const input = javascriptArtifactReconstructionInputSchema.parse(rawInput);
     abortIfNeeded(signal);
     const { path, metadata } = await resolveSelectedInput(input.input_path);
     const format = resolveFormat(path, metadata, input);
@@ -175,9 +175,12 @@ export const reconstructJavaScriptArtifact = async (
       const worker = await createJavaScriptSourceAnalysis(
         {
           heapMb:
-            input.max_heap_mb ?? JAVASCRIPT_ANALYSIS_RESOURCE_DEFAULTS.heapMb,
+            input.max_heap_mb ??
+            overrides?.["javascript.max_heap_mb"] ??
+            JAVASCRIPT_ANALYSIS_RESOURCE_DEFAULTS.heapMb,
           timeoutMs:
             input.analysis_timeout_ms ??
+            overrides?.["javascript.analysis_timeout_ms"] ??
             JAVASCRIPT_ANALYSIS_RESOURCE_DEFAULTS.timeoutMs,
         },
         files.files.filter(
@@ -487,7 +490,7 @@ const selectedInputResolutionMessage = (
 const resolveFormat = (
   path: string,
   metadata: Stats,
-  input: JavaScriptArtifactReconstructionInput,
+  input: AnalyzeJavaScriptApplicationInput,
 ): "asar" | "directory" => {
   const observed = metadata.isDirectory()
     ? "directory"

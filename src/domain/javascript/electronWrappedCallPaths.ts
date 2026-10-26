@@ -14,6 +14,7 @@ import {
   semanticResolutionBlocked,
   type JavaScriptSemanticAnalysisState,
 } from "./javascriptSemanticState.js";
+import { semanticIdentifierRole } from "./javascriptSemanticProjection.js";
 import type { JavaScriptElectronIdentity } from "./javascriptSemanticAnalysis.js";
 import type { JavaScriptAnalysisAccumulator } from "./javascriptStaticAnalysisState.js";
 import type {
@@ -32,17 +33,22 @@ import {
   boundedExpression,
   contextBridgeMemberPathDepth,
 } from "./electronStaticAnalysisValues.js";
-import { argumentNode } from "./javascriptStaticAnalysisHelpers.js";
+import {
+  argumentNode,
+  range,
+  calleeName,
+} from "./javascriptStaticAnalysisHelpers.js";
 import {
   childNodes,
-  traverseJavaScriptAst,
+  traverseJavaScriptValueAst,
+  traverseJavaScriptValueAstSteps,
 } from "./javascriptSemanticTraversal.js";
-import { range, calleeName } from "./javascriptStaticAnalysisHelpers.js";
 import { ipcDescriptor } from "./electronStaticAnalysisIpc.js";
+import { symbolicLogicalRight } from "./javascriptSymbolicControlFlow.js";
 import {
-  symbolicDefiniteExit,
-  symbolicLogicalRight,
-} from "./javascriptSymbolicControlFlow.js";
+  ElectronCallPathBlockPrefixes,
+  type ElectronStatementFallthrough,
+} from "./electronCallPathBlockPrefixes.js";
 import { compareUnicodeCodePoints } from "../unicodeCodePointOrder.js";
 
 const callLabel = (node: t.Node): string =>
@@ -226,16 +232,19 @@ interface PathContext {
 }
 
 /** Substitutes inert wrapper syntax; every emitted path remains a candidate. */
-export const collectElectronWrappedCallPaths = (
+export function* collectElectronWrappedCallPathsSteps(
   program: t.Program,
   state: JavaScriptSemanticAnalysisState,
   source: string,
   accumulator: JavaScriptAnalysisAccumulator,
   identity: JavaScriptElectronIdentity,
-): readonly ElectronCallPath[] => {
+): Generator<void, readonly ElectronCallPath[]> {
   // Bounds repeated interprocedural expansion independently of bundle bytes.
   // Exhaustion is reported as unknown coverage, never as a negative finding.
   let remainingVisits = 1_000_000;
+  const prefixes = new ElectronCallPathBlockPrefixes(
+    () => --remainingVisits >= 0,
+  );
   const resolver = new JavaScriptSymbolicBindings(state, program, identity);
   const paths: ElectronCallPath[] = [];
   const seen = new Set<string>();
@@ -281,28 +290,26 @@ export const collectElectronWrappedCallPaths = (
     };
   };
   const sequentialFallthrough = (
-    statement: t.Statement,
+    fact: ElectronStatementFallthrough | null,
     env: SymbolicEnvironment,
     context: PathContext,
   ): { readonly continues: boolean; readonly context: PathContext } => {
-    if (symbolicDefiniteExit(statement)) return { continues: false, context };
-    if (!t.isIfStatement(statement)) return { continues: true, context };
-    const truth = symbolicTruth(resolver.evaluate(statement.test, env));
+    if (fact === null) return { continues: true, context };
+    if (fact.kind === "exit") return { continues: false, context };
+    const truth = symbolicTruth(resolver.evaluate(fact.test, env));
     if (truth !== undefined)
-      return symbolicDefiniteExit(
-        truth ? statement.consequent : statement.alternate,
-      )
+      return (truth ? fact.consequentExits : fact.alternateExits)
         ? { continues: false, context }
         : { continues: true, context };
-    if (symbolicDefiniteExit(statement.consequent))
+    if (fact.consequentExits)
       return {
         continues: true,
-        context: condition(context, statement.test, false),
+        context: condition(context, fact.test, false),
       };
-    if (symbolicDefiniteExit(statement.alternate))
+    if (fact.alternateExits)
       return {
         continues: true,
-        context: condition(context, statement.test),
+        context: condition(context, fact.test),
       };
     return { continues: true, context };
   };
@@ -440,28 +447,33 @@ export const collectElectronWrappedCallPaths = (
     if (activatedScopes === 0) return { captures: false, traceDependent };
     const scopes = new Set(enclosing.slice(0, activatedScopes));
     let captures = false;
-    t.traverseFast(fn.node, (node) => {
-      if (captures) return;
-      if (
-        t.isThisExpression(node) ||
-        t.isSuper(node) ||
-        (t.isMetaProperty(node) && node.meta.name === "new")
-      ) {
+    traverseJavaScriptValueAst(fn.node, state.erasedSyntaxNodes, {
+      enter: (node, parent, readAncestors) => {
+        if (captures) return;
+        if (
+          t.isThisExpression(node) ||
+          t.isSuper(node) ||
+          (t.isMetaProperty(node) && node.meta.name === "new")
+        ) {
+          captures =
+            contextOwnerActivated && inheritsFunctionContext(node, fn.node);
+          return;
+        }
+        if (!t.isIdentifier(node)) return;
+        if (
+          parent !== null &&
+          semanticIdentifierRole(node, parent, readAncestors) === null
+        )
+          return;
+        const binding = resolveSemanticBindingState(state, node, node.name);
         captures =
-          contextOwnerActivated && inheritsFunctionContext(node, fn.node);
-        return;
-      }
-      if (!t.isIdentifier(node)) return;
-      const parent = state.parentsByNode.get(node);
-      if (parent !== undefined && !t.isReferenced(node, parent)) return;
-      const binding = resolveSemanticBindingState(state, node, node.name);
-      captures =
-        binding === undefined
-          ? (node.name === "arguments" &&
-              contextOwnerActivated &&
-              inheritsFunctionContext(node, fn.node)) ||
-            semanticResolutionBlocked(state, node, node.name)
-          : scopes.has(binding.scopeId);
+          binding === undefined
+            ? (node.name === "arguments" &&
+                contextOwnerActivated &&
+                inheritsFunctionContext(node, fn.node)) ||
+              semanticResolutionBlocked(state, node, node.name)
+            : scopes.has(binding.scopeId);
+      },
     });
     return { captures, traceDependent };
   };
@@ -1136,12 +1148,17 @@ export const collectElectronWrappedCallPaths = (
     env: SymbolicEnvironment,
     context: PathContext,
   ): void {
+    if (state.erasedSyntaxNodes.has(node)) return;
     if (--remainingVisits < 0 || t.isFunction(node) || t.isClass(node)) return;
     if (t.isBlockStatement(node)) {
       let next = context;
       for (const statement of node.body) {
         walk(statement, env, next);
-        const fallthrough = sequentialFallthrough(statement, env, next);
+        const fallthrough = sequentialFallthrough(
+          prefixes.statement(statement),
+          env,
+          next,
+        );
         if (!fallthrough.continues) break;
         next = fallthrough.context;
       }
@@ -1187,70 +1204,98 @@ export const collectElectronWrappedCallPaths = (
       call(node, env, context);
     for (const child of childNodes(node)) walk(child, env, context);
   }
-  traverseJavaScriptAst(program, {
-    enter: (node) => {
-      if (!t.isCallExpression(node) && !t.isOptionalCallExpression(node))
-        return;
-      const isolatedSeed = t.isStringLiteral(node.arguments[0])
-        ? undefined
-        : isolatedBridgeCall(node);
-      if (!t.isStringLiteral(node.arguments[0]) && isolatedSeed === undefined)
-        return;
-      const env = isolatedSeed?.env ?? resolver.environmentAt(node);
-      let context: PathContext = {
-        entryNode: node,
-        calls: [],
-        entry: "",
-        entryKind: null,
-        channel: null,
-        steps: [],
-        conditions: [],
-        active: new Set(),
-      };
-      for (
-        let child: t.Node = node, parent = state.parentsByNode.get(child);
-        parent && !t.isFunction(parent);
-        child = parent, parent = state.parentsByNode.get(child)
-      ) {
-        if (t.isIfStatement(parent) || t.isConditionalExpression(parent)) {
-          if (child === parent.test) continue;
-          const truth = symbolicTruth(resolver.evaluate(parent.test, env));
-          const positive = child === parent.consequent;
-          if (truth !== undefined && truth !== positive) return;
-          if (truth === undefined)
-            context = condition(context, parent.test, positive);
-        } else if (t.isLogicalExpression(parent) && child === parent.right) {
-          const right = symbolicLogicalRight(
-            parent.operator,
-            resolver.evaluate(parent.left, env),
+  let prefixVisits = 0;
+  function* seed(
+    node: t.CallExpression | t.OptionalCallExpression,
+  ): Generator<void, void> {
+    if (remainingVisits < 0) return;
+    const isolatedSeed = t.isStringLiteral(node.arguments[0])
+      ? undefined
+      : isolatedBridgeCall(node);
+    if (!t.isStringLiteral(node.arguments[0]) && isolatedSeed === undefined)
+      return;
+    const env = isolatedSeed?.env ?? resolver.environmentAt(node);
+    let context: PathContext = {
+      entryNode: node,
+      calls: [],
+      entry: "",
+      entryKind: null,
+      channel: null,
+      steps: [],
+      conditions: [],
+      active: new Set(),
+    };
+    for (
+      let child: t.Node = node, parent = state.parentsByNode.get(child);
+      parent && !t.isFunction(parent);
+      child = parent, parent = state.parentsByNode.get(child)
+    ) {
+      if (--remainingVisits < 0) return;
+      if (++prefixVisits % 1024 === 0) yield;
+      if (t.isIfStatement(parent) || t.isConditionalExpression(parent)) {
+        if (child === parent.test) continue;
+        const truth = symbolicTruth(resolver.evaluate(parent.test, env));
+        const positive = child === parent.consequent;
+        if (truth !== undefined && truth !== positive) return;
+        if (truth === undefined)
+          context = condition(context, parent.test, positive);
+      } else if (t.isLogicalExpression(parent) && child === parent.right) {
+        const right = symbolicLogicalRight(
+          parent.operator,
+          resolver.evaluate(parent.left, env),
+        );
+        if (right === false) return;
+        if (right === undefined)
+          context = condition(
+            context,
+            parent.left,
+            parent.operator === "??" ? "nullish" : parent.operator === "&&",
           );
-          if (right === false) return;
-          if (right === undefined)
-            context = condition(
-              context,
-              parent.left,
-              parent.operator === "??" ? "nullish" : parent.operator === "&&",
-            );
-        } else if (t.isBlockStatement(parent)) {
-          const index = parent.body.findIndex(
-            (statement) => statement === child,
-          );
-          if (index >= 0) {
-            for (const statement of parent.body.slice(0, index)) {
-              const fallthrough = sequentialFallthrough(
-                statement,
-                env,
-                context,
-              );
-              if (!fallthrough.continues) return;
-              context = fallthrough.context;
-            }
+      } else if (t.isBlockStatement(parent)) {
+        const prefix = yield* prefixes.before(parent, child);
+        if (remainingVisits < 0) return;
+        if (prefix !== undefined) {
+          for (const entry of prefix.entries) {
+            if (entry.position >= prefix.before) break;
+            if (--remainingVisits < 0) return;
+            if (++prefixVisits % 1024 === 0) yield;
+            const fallthrough = sequentialFallthrough(entry.fact, env, context);
+            if (!fallthrough.continues) return;
+            context = fallthrough.context;
           }
         }
       }
-      call(node, env, context, isolatedSeed?.callee);
+    }
+    call(node, env, context, isolatedSeed?.callee);
+  }
+  // The shared walker supplies one bounded batch at a time. Prefix work must
+  // run outside its synchronous callback so cancellation can interrupt a large
+  // block index or a genuinely long sequence of contextual branch facts.
+  const seeds: (t.CallExpression | t.OptionalCallExpression)[] = [];
+  const traversal = traverseJavaScriptValueAstSteps(
+    program,
+    state.erasedSyntaxNodes,
+    {
+      enter: (node) => {
+        if (t.isCallExpression(node) || t.isOptionalCallExpression(node))
+          seeds.push(node);
+      },
     },
-  });
+  );
+  try {
+    for (;;) {
+      const batch = traversal.next();
+      for (const node of seeds) {
+        yield* seed(node);
+        if (remainingVisits < 0) break;
+      }
+      seeds.length = 0;
+      if (batch.done || remainingVisits < 0) break;
+      yield;
+    }
+  } finally {
+    traversal.return();
+  }
   recordBridgeExposures();
   if (remainingVisits < 0 || resolver.truncated) {
     accumulator.unknownFindings += 1;
@@ -1258,4 +1303,4 @@ export const collectElectronWrappedCallPaths = (
   }
   if (resolver.unresolved) accumulator.unknownFindings += 1;
   return paths;
-};
+}

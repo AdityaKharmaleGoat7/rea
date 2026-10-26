@@ -319,14 +319,14 @@ Register with the variable unset:
 <!-- x-release-please-start-version -->
 
 ```bash
-claude mcp add --scope local rea -- npx -y rea-agents@6.7.0 mcp
+claude mcp add --scope local rea -- npx -y rea-agents@6.8.0 mcp
 ```
 
 On native Windows, use the same project directory and wrap the package-runner
 shim so the stdio client can launch it:
 
 ```powershell
-claude mcp add --scope local rea -- cmd.exe /d /c npx -y rea-agents@6.7.0 mcp
+claude mcp add --scope local rea -- cmd.exe /d /c npx -y rea-agents@6.8.0 mcp
 ```
 
 <!-- x-release-please-end -->
@@ -616,9 +616,12 @@ hosted connector; see [its configuration](client-configuration.md#other-client-s
 | WorkBuddy          | `workbuddy`      |
 | ZCode              | `zcode`          |
 | DeepSeek Harness   | `dsh`            |
+| FreeBuff           | `freebuff`       |
 
 `droid`, `dsh`, `kimi`, `qoder`, `trae`, `workbuddy`, and `zcode` require
 `rea-agents@6.5.0` or later. The 6.4.0 registry check above does not cover them.
+`freebuff` requires `rea-agents@6.8.0` or later. Older releases reject
+`rea setup --client freebuff` as an unsupported client.
 
 See [client configuration and troubleshooting](client-configuration.md) for
 configuration paths, profiles, trust policies, and schema-limit workarounds.
@@ -681,6 +684,12 @@ search permissions (`0700`) on a directory you own before retrying.
 
 On supported Linux distributions, approved setup verifies Hopper's official
 `.deb`, `.rpm`, or Arch package before invoking the native package manager.
+On apt systems, Hopper's runtime dependencies are installed with
+`--no-upgrade` in their own transaction, so setup no longer names an
+already-installed dependency as an upgrade target. apt can still upgrade a
+package that the Hopper package or the Python library repair requires at a
+newer version. Arch's `pacman -S --needed` still updates an outdated
+dependency.
 The official release feed selects the current public demo without a version
 pin. REA verifies the package's detached PGP signature against Hopper's stable
 primary fingerprint `7C2D73BAFAF5B9A710A69DA1A26DF815099B1BCD`, then checks
@@ -745,6 +754,18 @@ may conflict with Hopper's versioned `zlib` dependency. Resolve the package
 conflict yourself, install Hopper's official package manually, or use another
 provider such as Ghidra; rerun `rea setup` after installing Hopper.
 
+If setup cannot finish releasing its resources, a normally returned structured
+result reports `needs_human` and includes `cleanup.reason` with the identified
+paths in `cleanup.resources`. A thrown typed failure reports the same retained
+paths in `details.resources`, preserving the primary failure separately. Reasons
+that do not identify a resource remain explicit without guessing paths from text.
+For in-process callers retaining REA's setup host, a successful retry of its close
+updates the original failure's cleanup state and removes released resource labels.
+Custom `SetupHost` implementations must bind returned or thrown cleanup errors
+to their resource owners to provide the same live recovery. An ownerless error
+remains an unconfirmed snapshot: `runSetup` does not observe later direct calls
+to the caller's port or replace that port's methods.
+
 The supported Linux demo forwards additional launches into its existing
 application, even across private displays. REA therefore reserves one Linux
 Hopper application per user across cooperating REA processes. A competing
@@ -791,7 +812,10 @@ Hopper startup allows 120,000 ms for launch, initial analysis, and authenticated
 bridge readiness. For large targets, set `REA_HOPPER_STARTUP_TIMEOUT_MS` to a
 decimal integer from 1 to 2,147,483,647 milliseconds in the environment that
 starts REA. CLI and MCP use the same setting; invalid values fail configuration
-validation. An MCP client's own request timeout must also allow enough time.
+validation. In MCP, `update_analysis_settings` can set
+`hopper.startup_timeout_ms` for the next startup attempt without restarting REA;
+accepted work keeps its budget and retained cleanup must still complete. An
+MCP client's own request timeout must also allow enough time.
 `open_binary` validates and selects a target without waiting for native provider
 readiness. During Hopper startup, `binary_session.provider_operation_health`
 reports `busy` at stage `launch`; `analysis_activity` describes bridge requests
@@ -985,9 +1009,13 @@ Target admission preserves recognized PE/NE/LE/LX signatures separately from
 reader layout support. A Windows header overlapping the first 64 DOS-header
 bytes remains an unsupported layout in this release; it is not reported as an
 invalid offset. Tiny PE files with short optional headers have additional
-unverified loader requirements. Unconfirmed nonzero DOS padding remains an
-unresolved Windows-header candidate, with independently validated DOS facts in
-the target error diagnostics; those facts do not prove a Windows header absent.
+unverified loader requirements. A nonzero Windows-header pointer without a
+recognized signature remains an unresolved candidate, with independently
+validated DOS facts in the target error diagnostics; those facts do not prove a
+Windows header absent. When a nonempty relocation table ends inside a complete
+DOS header, the remaining header bytes are DOS padding, so a nonzero dword
+there is not a Windows declaration. An unread signature beyond the current
+probe is requested before that padding rule applies.
 On Linux and macOS, `annotate_native_function` also edits a function name and/or
 entry comments atomically and returns refreshed analysis, and `set_address_name`
 and `set_addresses_names` name a function entry or any other mapped address
@@ -1157,19 +1185,25 @@ can time out earlier even when Ghidra would complete within its startup deadline
 See [Ghidra first-query deadlines and recovery](mcp-contracts.md#ghidra-first-query-deadlines-and-recovery)
 for client options and the close/reopen recovery flow.
 
-The 330-second default is configurable. Configuration is read when REA starts:
-changing an environment variable in another shell, or closing and reopening a
-binary in the same MCP server, does not change that server's startup allowance.
+The 330-second default can be changed on a running MCP server by setting
+`ghidra.startup_timeout_ms` through `update_analysis_settings`. The next accepted
+operation that starts a provider uses that value; an accepted startup keeps its
+original budget. Changing an environment variable in another shell, or closing
+and reopening a binary, does not change the launch configuration already read
+by that server.
 For a CLI retry with an example 30-minute allowance:
 
 ```sh
 REA_GHIDRA_STARTUP_TIMEOUT_MS=1800000 rea analyze /absolute/path/to/app.exe --provider ghidra --json
 ```
 
-For MCP, export useful Evidence before restarting, close the binary and resolve
-any cleanup failure, update the environment in the client's REA server launch
-configuration, then restart REA and reconnect before reopening the target. Allow
-startup plus the query in the client's own tool-call deadline. Every retry uses
+For MCP, update the runtime setting and resolve any retained cleanup before the
+next startup attempt. Follow the error's close/reopen guidance where needed;
+the settings update does not clear cleanup blockers. To change the launch
+environment instead, export useful Evidence, close the binary and resolve any
+cleanup failure, update the client's REA server launch configuration, then
+restart REA and reconnect. Allow startup plus the query in the client's own
+tool-call deadline; runtime updates do not change that deadline. Each new startup attempt uses
 a fresh ephemeral import; smaller result requests do not reduce the prerequisite
 auto-analysis. A larger time allowance does not raise the JVM heap limit or
 guarantee completion. Keep [heap and host CPU controls](#ghidra-heap-and-cpu-controls)
@@ -1196,9 +1230,14 @@ fails with `provider_timeout` and that message; other Ghidra tools stay
 available. If the caller also cancels while the timeout settles, the session
 still closes and the message says so. Session reuse concerns an active MCP or
 library session; a standalone CLI command still closes its own session when it
-finishes. The limit is read when a Ghidra session
-starts, and Codex/Kimi registrations derived by `rea setup` add it to the tool
-deadline as a single-decompile estimate. A bulk call can need that limit for
+finishes. In MCP, `ghidra.decompile_timeout_seconds` can override the launch
+value for newly accepted operations on the existing Program; explicit `null`
+removes the deadline. A transient timeout remains uncached so the same function
+can be retried after an update. See the
+[settings design](design/limits-and-recovery.md#runtime-settings-through-mcp).
+Codex/Kimi registrations derived by `rea setup` add the selected launch value
+to the tool deadline as a single-decompile estimate; a runtime update does not
+change that registration. A bulk call can need that limit for
 every attempted function plus listing and file work; select the client deadline
 for the workload, split batches, use `decompile_all` limit/resume, or reduce
 `trace_native_values` `max_functions` to select fewer serial decompiles. Ghidra's own interactive default is 30 seconds. Unresolved computed calls
@@ -1432,7 +1471,7 @@ For a client that requires manual configuration, use:
   "mcpServers": {
     "rea": {
       "command": "npx",
-      "args": ["-y", "rea-agents@6.7.0", "mcp"]
+      "args": ["-y", "rea-agents@6.8.0", "mcp"]
     }
   }
 }
@@ -1445,6 +1484,13 @@ writes the same package-runner shape, or `bunx rea-agents@<version> mcp` when
 setup runs through `bunx`, and pins it to the exact version that performed
 setup. Run current setup to refresh an older registration, then restart the
 client.
+
+Package runners key their package cache by the requested spec, so the entry
+installed for the `@latest` invocation that ran setup cannot serve the pinned
+registration. Setup therefore materializes the pinned entry once, best-effort
+with a bounded timeout, before finishing. When that step cannot run, for
+example offline, the first client start performs the one-time install inside
+the client's MCP startup deadline and may need one more restart.
 
 ## Package runners and global installation
 

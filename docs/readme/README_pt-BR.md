@@ -1,7 +1,7 @@
 <div align="center">
 
 [English](../../README.md) · [简体中文](README_zh.md) · [繁體中文](README_zh-TW.md) · [日本語](README_ja.md) · [한국어](README_ko.md) · [Türkçe](README_tr.md) · [Русский](README_ru.md) · [Tiếng Việt](README_vi.md) · [ไทย](README_th.md) · [Deutsch](README_de.md) · [Español](README_es.md) · [Français](README_fr.md) · [Українська](README_uk.md) · [Polski](README_pl.md) · **Português (Brasil)** · [العربية](README_ar.md) · [فارسی](README_fa.md) · [Bahasa Indonesia](README_id.md) · [Italiano](README_it.md)
-· [Ελληνικά](README_el.md) · [മലയാളം](README_ml.md) · [Roman Urdu](README_ur-Latn.md)
+· [Ελληνικά](README_el.md) · [മലയാളം](README_ml.md) · [Roman Urdu](README_ur-Latn.md) · [Română](README_ro.md)
 
 # REA: Faça engenharia reversa de qualquer coisa
 
@@ -20,7 +20,7 @@
 
 **[Site](https://rea.tools/pt-BR/) · [Guias](https://rea.tools/pt-BR/guides/) · [Casos de uso](https://rea.tools/pt-BR/showcase/)**
 
-[Início rápido](#início-rápido) · [Como o REA funciona](#como-o-rea-funciona) · [O que você pode analisar](#o-que-você-pode-analisar) · [Casos de uso](#casos-de-uso) · [Perguntas frequentes](#perguntas-frequentes) · [Ferramentas GNU objdump e Rizin](../reverse-engineering-tools.md) · [Documentação](#documentação)
+[Início rápido](#início-rápido) · [Como o REA funciona](#como-o-rea-funciona) · [O que você pode analisar](#o-que-você-pode-analisar) · [Casos de uso](#casos-de-uso) · [Criar ambientes de RL](#build-rl-environments) · [Perguntas frequentes](#perguntas-frequentes) · [Ferramentas GNU objdump e Rizin](../reverse-engineering-tools.md) · [Documentação](#documentação)
 
 <code>npx rea-agents setup</code>
 
@@ -158,7 +158,9 @@ O REA requer Node.js 22.x (>=22.23.4), 24.x (>=24.22.1) ou 26+ (>=26.12.1), alé
 | Bytecode EVM                | Seletores de despacho, offsets de bytes, argumentos inferidos e mutabilidade                                            | Entrada local com bytes brutos ou representação hexadecimal no Linux x64; [guia de EVM sem execução](../evm-bytecode.md)                     |
 | Rust binaries               | Embedded cargo-auditable dependency list                                                                                | [Rust binaries](../rust-binaries.md)                                                                                                         |
 | ELF notes                   | PT_NOTE/SHT_NOTE owners, types, GNU build-id and ABI-tag fields                                                         | Built-in static ELF inspection; [ELF notes](../elf-notes.md)                                                                                 |
+| Linux kernel modules        | .modinfo keys, __versions CRCs, this_module presence, and signature trailer                                             | Built-in static ELF inspection; [kernel modules](../kernel-modules.md)                                                                       |
 | Erlang BEAM                 | IFF chunks, atoms, exports, and tables                                                                                  | Built-in static BEAM inspection; [Erlang BEAM](../erlang-beam.md)                                                                            |
+| Apple IPS crashes           | .ips metadata, threads, images, registers and crash classes                                                             | Built-in static JSON inspection; [Apple IPS](../apple-ips.md)                                                                                |
 | Falhas do Linux registradas | Registros note brutos, registradores/sinais de cada thread registrada e candidatos opcionais a mapeamentos              | pwntools fornecido pelo chamador no Linux x64; GDB/pwndbg opcionais; [falhas registradas](../recorded-crashes.md)                            |
 | Instalações desktop         | Ambientes candidatos, arquivos de evidência, componentes e próximos passos                                              | Inspeção limitada de diretórios e cabeçalhos；[Aplicações desktop](../desktop-applications.md)                                               |
 | JavaScript / Electron       | Módulos, importações, source maps, rotas, IPC e relações com complementos nativos                                       | Node.js e npm; [análise de aplicativos](../javascript-application-workflows.md); Linux: procps `ps`                                          |
@@ -221,7 +223,50 @@ Inspecione as instruções de 16 bits do jogo original para PC-98, recupere os c
 
 [Leia o estudo de caso](https://rea.tools/pt-BR/showcase/th04/) · [Repositório da reconstrução](https://github.com/N0zoM1z0/th04)
 
+### Criar ambientes de RL com o REA
+
+Grave uma sessão de aplicativo web, transforme sua API em ferramentas e exporte um ambiente que um agente de IA possa usar. Execute com o AgentEnv e adicione tarefas e verificações de recompensa para treinamento RL ou avaliação.
+
+[Guia para criar um ambiente](https://rea.tools/guides/rl-environments/) ·
+[Veja a demonstração no X](https://x.com/reatools/status/2112574822584918075?s=20)
+
 Se você usou o REA em algo interessante, gostaríamos de conhecer. Compartilhe seu caso em uma [issue](https://github.com/morluto/rea/issues) ou um [pull request](https://github.com/morluto/rea/pulls), incluindo o alvo, sua pergunta, como o REA ajudou e o que descobriu.
+
+<a id="build-rl-environments"></a>
+
+## Criar ambientes de RL
+
+Crie um ambiente local onde um agente de IA possa praticar tarefas como encontrar uma issue ou criar uma pasta, sem executar o aplicativo original. Use para aprendizado por reforço (RL) ou para testar como o agente conclui tarefas.
+
+O REA transforma requisições e respostas de API gravadas em ferramentas que o agente pode chamar. O ambiente usa os dados gravados e só aceita alterações cujos efeitos sejam confirmados pela gravação.
+
+Configure o REA no agente e substitua a URL e as tarefas de pastas do exemplo pelas suas:
+
+```text
+Use o REA para criar um ambiente de RL a partir do meu aplicativo web de teste em
+http://127.0.0.1:3000.
+Inclua listar, criar, renomear e excluir pastas. Pode criar e remover
+pastas de teste, mas não altere os dados existentes.
+Salve em uma pasta chamada my-env, verifique quais operações funcionam e diga como executar.
+```
+
+<details>
+<summary>Usar a linha de comando</summary>
+
+Use estes comandos se já tiver um arquivo com as requisições e respostas do aplicativo gravadas no navegador. Para executar o resultado, você também precisa do AgentEnv e do Docker.
+
+```sh
+rea environment-build ./session.har ./my-env --name my-env --json
+agent-env run ./my-env
+```
+
+</details>
+
+O REA exporta um ambiente executável com um teste básico para verificar se ele inicia e responde. Use com seu framework de RL para definir objetivos, adicionar verificações de recompensa e executar o treinamento.
+
+[Guia para criar um ambiente](https://rea.tools/guides/rl-environments/) ·
+[Referência de ambientes](../agent-environments.md) ·
+[Veja a demonstração no X](https://x.com/reatools/status/2112574822584918075?s=20)
 
 ## Perguntas frequentes
 

@@ -115,7 +115,7 @@ export const analysisErrorRemediationAction = (
     return "Use an artifact within the capacity reported in details.detail. Changing output detail or retrying the unchanged input does not remove this boundary.";
   if (error instanceof HopperTimeoutError)
     return error.operation === undefined
-      ? "Review details.launcher and inspect Hopper for ongoing initial analysis or a pending loader, demo, or license dialog. For a large target, increase REA_HOPPER_STARTUP_TIMEOUT_MS in the environment that starts REA and allow at least that long in the MCP client. Resolve retained cleanup before reopening."
+      ? "Review details.launcher and inspect Hopper for ongoing initial analysis or a pending loader, demo, or license dialog. For a large target, use update_analysis_settings with setting hopper.startup_timeout_ms and action set for the next startup attempt without restarting REA, or increase REA_HOPPER_STARTUP_TIMEOUT_MS for future REA processes. Allow at least that long in the MCP client. Resolve retained cleanup before reopening."
       : error.providerState === "busy"
         ? "Check binary_session.analysis_activity, wait for the active Hopper request to finish, then retry."
         : "Check binary_session for Hopper health, then retry the operation.";
@@ -158,10 +158,18 @@ export const analysisErrorRemediationAction = (
     return "Check the current process's read access to the selected path. Retry with a readable local file.";
   if (error instanceof AnalysisArtifactChangedError)
     return "Wait until the selected file is stable. For an active binary session, reopen the target with open_binary before retrying so REA acquires its current identity; for a CLI command or target-free tool, rerun the operation.";
-  if (error instanceof ConfigurationError && error.settings.length > 0)
-    return `Correct ${[...new Set(error.settings.map(({ setting }) => setting))].join(", ")} in the environment that starts REA (your shell or the MCP client's registration), then rerun.`;
+  if (error instanceof ConfigurationError)
+    return (
+      error.remediationAction ??
+      (error.settings.length > 0
+        ? `Correct ${[...new Set(error.settings.map(({ setting }) => setting))].join(", ")} in the environment that starts REA (your shell or the MCP client's registration), then rerun.`
+        : analysisErrorUserMessage(error))
+    );
   if (error instanceof AnalysisInputError)
-    return `Read the declared input schema or CLI usage for ${error.operation}; if using MCP and the catalog may be stale, call tools/list. Correct the listed fields, then retry. Do not repeat the unchanged call.`;
+    return (
+      error.remediationAction ??
+      `Read the declared input schema or CLI usage for ${error.operation}; if using MCP and the catalog may be stale, call tools/list. Correct the listed fields, then retry. Do not repeat the unchanged call.`
+    );
   if (
     error instanceof AnalysisOutputError &&
     error.remediationAction !== undefined

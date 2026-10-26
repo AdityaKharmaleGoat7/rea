@@ -1,12 +1,11 @@
 import { jsonTextCodeUnits } from "../jsonSerialization.js";
 import type { JsonValue } from "../jsonValue.js";
-import { ok } from "../result.js";
 import {
   collectionPathOf,
   isObject,
   isParam,
-  isStateWrite,
   normalizedPath,
+  same,
   scalarText,
   segmentsOf,
   selectedCollection,
@@ -14,7 +13,20 @@ import {
   type StateEntity,
   type SuppliedSegment,
 } from "./environmentStateRules.js";
-import { createdFields } from "./environmentStateWriteApply.js";
+import {
+  createdFields,
+  recordedGeneratedValue,
+} from "./environmentStateWriteApply.js";
+import {
+  createdToken,
+  isOpaqueToken,
+  restampedFields,
+} from "./environmentStateWriteStamps.js";
+import {
+  recordedPathValues,
+  respondedIds,
+  sameLinkedSource,
+} from "./environmentStateWriteLinks.js";
 import {
   collectionTarget,
   entityTarget,
@@ -22,9 +34,12 @@ import {
 import {
   built,
   callOf,
+  clockEvidence,
   fail,
+  referencedIn,
+  itemReads,
   refuse,
-  requestObject,
+  requestBodyPlan,
   retainFixed,
   searchFrom,
   startOf,
@@ -35,26 +50,39 @@ import {
   type WriteStep,
 } from "./environmentStateWriteEffects.js";
 import {
+  createdInteger,
   explainCreate,
   insertCandidates,
   insertIndex,
+  randomIdentities,
   nextInteger,
   responseShapeOf,
 } from "./environmentStateWriteExplain.js";
 import {
   laterObservation,
   newEntityIn,
+  respelledInstant,
+  withRead,
   type Observed,
 } from "./environmentStateWriteObserve.js";
 import {
+  keptOrders,
   pathValuesOf,
+  siblingTrimmedClocks,
   type FieldRule,
   type WriteCall,
 } from "./environmentStateWriteRules.js";
 import {
+  fittedClockFormat,
+  noteFixedWidths,
+} from "./environmentStateWriteClockFormats.js";
+import { mergedCreatePlan } from "./environmentStateWriteCreateCalls.js";
+import {
+  containsDelimited,
+  generatedIntegerDigits,
   isUuid,
+  likeGeneratedInteger,
   nextSequence,
-  readClock,
   sequenceNumber,
   spelledLike,
 } from "./environmentStateWriteValues.js";
@@ -71,8 +99,13 @@ const respondedId = (
   return members.length === 1 ? scalarText(members[0]) : undefined;
 };
 
-/** The written entity a create's response or a later read shows. */
-const createdObservation = (
+/**
+ * A create's answer with the first read of its entity before the next write over it, when that read shows fields the
+ * answer lacks or spells its clocks to another precision: the state holds what reads show. An item read that agrees
+ * with the answer otherwise lends it its fields and then observes rather than checks; one that disagrees still checks
+ * the create. A list read, which may show fewer keys of an object, only adds fields the answer lacks and still checks.
+ */
+const withReadBack = (
   context: EffectContext,
   step: WriteStep,
   target: {
@@ -80,52 +113,233 @@ const createdObservation = (
     readonly collection: string;
     readonly idField: string;
   },
+  own: Observed,
+): Observed => {
+  const later = laterObservation(searchFrom(context, step), {
+    type: target.type,
+    collection: target.collection,
+    idField: target.idField,
+    id: own.id,
+    held: () => false,
+    isWrite: context.isWrite,
+  });
+  if (later === undefined) return own;
+  const view = context.viewOf(later.ordinal);
+  if (
+    view?.shape === "item" &&
+    (view.fields.some(
+      (field) =>
+        Object.hasOwn(own.object, field) && !Object.hasOwn(later.object, field),
+    ) ||
+      Object.entries(later.object).some(
+        ([field, value]) =>
+          Object.hasOwn(own.object, field) &&
+          !same(own.object[field], value) &&
+          !respelledInstant(own.object[field], value),
+      ))
+  )
+    return own;
+  const shape = view?.shape === "item" ? "item" : "list";
+  const object = withRead(own.object, later.object, shape);
+  if (same(object, own.object)) return own;
+  if (shape === "item") context.observed(later.ordinal);
+  return {
+    ...own,
+    object,
+    read: { ordinal: later.ordinal, pointer: later.pointer, shape },
+  };
+};
+
+/**
+ * The written entity a create's response or a later read shows. A linked create's read must name an
+ * id its response returned, as the read that linked it did, envelopes included.
+ */
+const createdObservation = (
+  context: EffectContext,
+  step: WriteStep,
+  target: {
+    readonly type: string;
+    readonly collection: string;
+    readonly idField: string;
+    readonly linked: boolean;
+  },
 ): Observed | undefined => {
   const held = (id: string) =>
     context.state.entity(target.type, target.collection, id) !== undefined;
   const own = context.io.withBody(step.record.ordinal, (body) =>
     newEntityIn(step.record.ordinal, body, target.idField, held),
   );
-  if (own !== undefined) return own;
-  // A response that names the created id alone ties the later read to that id.
-  const id = context.io.withBody(step.record.ordinal, (body) =>
-    respondedId(body, target.idField),
-  );
+  if (own !== undefined) return withReadBack(context, step, target, own);
+  const { id, ids } = context.io.withBody(step.record.ordinal, (body) => {
+    const returned = target.linked ? respondedIds(body) : [];
+    // A response that names the created id alone ties the later read to that id.
+    const named =
+      respondedId(body, target.idField) ??
+      (returned.length === 1 ? returned[0] : undefined);
+    return { id: named, ids: returned };
+  });
   const later = laterObservation(searchFrom(context, step), {
-    ...target,
+    type: target.type,
+    collection: target.collection,
+    idField: target.idField,
     ...(id === undefined ? {} : { id }),
     held,
-    isWrite: isStateWrite,
+    isWrite: context.isWrite,
   });
-  if (later !== undefined) context.observed(later.ordinal);
+  // A read named by the id is tied already; otherwise a linked create's read must name a returned id.
+  if (
+    later === undefined ||
+    (target.linked && id === undefined && !ids.includes(later.id))
+  )
+    return undefined;
+  context.observed(later.ordinal);
   return later;
 };
 
 const fieldsOf = (entities: readonly StateEntity[]): JsonObject[] =>
   entities.map((entity) => entity.fields);
 
+/** Whether a created field holds a generated token or integer that another field holds too, which no rule rebuilds. */
+const linkedGenerated = (
+  field: string,
+  entity: JsonObject,
+  type: readonly JsonObject[],
+): boolean =>
+  createdToken(field, entity, type) === "linked" ||
+  createdInteger(field, entity, type) === "linked";
+
+/** Whether a field's rule rebuilds it from `source`, as a template or a composition does. */
+const rebuiltFrom = (rule: FieldRule | undefined, source: string): boolean =>
+  rule?.rule === "template"
+    ? rule.from === source
+    : rule?.rule === "composed" &&
+      rule.parts.some((part) => "from" in part && part.from === source);
+
+/** Whether a unique integer's digits show in another string whose rule does not rebuild them from it, which seeding would leave behind. */
+const strandedInteger = (
+  rules: readonly FieldRule[],
+  entity: JsonObject,
+): boolean =>
+  rules.some((rule) => {
+    const digits =
+      rule.rule === "unique"
+        ? generatedIntegerDigits(entity[rule.field])
+        : undefined;
+    return (
+      digits !== undefined &&
+      Object.entries(entity).some(
+        ([other, kept]) =>
+          other !== rule.field &&
+          typeof kept === "string" &&
+          containsDelimited(kept, digits) &&
+          !rebuiltFrom(
+            rules.find((candidate) => candidate.field === other),
+            rule.field,
+          ),
+      )
+    );
+  });
+
+/** Whether a created field no rule explains holds a generated value another field links to, or a unique integer another string strands, which serving cannot keep consistent. */
+const linkedUnexplained = (
+  rules: readonly FieldRule[],
+  entity: JsonObject,
+  held: readonly JsonObject[],
+): boolean => {
+  const explained = new Set(rules.map((rule) => rule.field));
+  return (
+    Object.keys(entity).some(
+      (field) => !explained.has(field) && linkedGenerated(field, entity, held),
+    ) || strandedInteger(rules, entity)
+  );
+};
+
+/** Widen a create plan by a later call, when that call explained on its own agrees with it; whether it did. */
+const refineCreate = (
+  context: EffectContext,
+  draft: WriteDraft,
+  step: WriteStep,
+  evidence: CreateCallEvidence,
+): boolean => {
+  const { explained, held } = explainedCall(context, draft, step, evidence);
+  for (const member of keptOrders(evidence.call.body, evidence.observed.object))
+    draft.kept.add(member);
+  if (
+    (explained.tied && draft.plan.collection === null) ||
+    linkedUnexplained(explained.rules, evidence.observed.object, held)
+  )
+    return false;
+  const merged = mergedCreatePlan(
+    { rules: draft.plan.rules, body: draft.plan.body! },
+    draft.observed!,
+    {
+      entity: evidence.observed.object,
+      body: evidence.call.body,
+      rules: explained.rules,
+      contract: {
+        ...explained.body,
+        ...(evidence.envelope === undefined
+          ? {}
+          : { envelope: evidence.envelope }),
+      },
+    },
+    { kept: draft.kept, clockOf: (field) => clockEvidence(draft, field) },
+  );
+  if (merged === undefined) return false;
+  retainFixed(context, merged.body.fixed.slice(draft.plan.body!.fixed.length));
+  draft.plan.rules = merged.rules;
+  draft.plan.body = merged.body;
+  return true;
+};
+
+type CreateCallEvidence = {
+  readonly observed: Observed;
+  readonly call: WriteCall & { readonly body: JsonObject };
+  readonly collection: string;
+  readonly envelope: string | undefined;
+};
+
+/** Explain one recorded create on its own, against the entities its collection and type held before it. */
+const explainedCall = (
+  context: EffectContext,
+  draft: WriteDraft,
+  step: WriteStep,
+  evidence: CreateCallEvidence,
+) => {
+  const type = draft.plan.target!;
+  const members = fieldsOf(context.state.members(type, evidence.collection));
+  const held = fieldsOf(context.state.ofType(type));
+  const explained = explainCreate({
+    entity: evidence.observed.object,
+    call: evidence.call,
+    idField: context.idField(type),
+    startMs: startOf(context, step),
+    collection: members,
+    type: held,
+    named: (id) => context.state.named(id),
+  });
+  return { explained, members, held };
+};
+
 /** Build a create plan from its exemplar's observation. */
 const buildCreate = (
   context: EffectContext,
   draft: WriteDraft,
   step: WriteStep,
-  evidence: {
-    readonly observed: Observed;
-    readonly call: WriteCall & { readonly body: JsonObject };
-    readonly collection: string;
-  },
-): void => {
+  evidence: CreateCallEvidence,
+): boolean => {
   const type = draft.plan.target!;
   const idField = context.idField(type);
-  const members = fieldsOf(context.state.members(type, evidence.collection));
-  const explained = explainCreate({
-    entity: evidence.observed.object,
-    call: evidence.call,
-    idField,
-    startMs: startOf(context, step),
-    collection: members,
-    type: fieldsOf(context.state.ofType(type)),
-  });
+  const { explained, members, held } = explainedCall(
+    context,
+    draft,
+    step,
+    evidence,
+  );
+  if (linkedUnexplained(explained.rules, evidence.observed.object, held)) {
+    refuse(draft, step, "unexplained-change");
+    return false;
+  }
   const clocks = explained.rules.flatMap((rule) =>
     rule.rule === "clock" ? [rule.field] : [],
   );
@@ -135,15 +349,33 @@ const buildCreate = (
       ["string", "number"].includes(typeof member[field]),
     ),
   );
-  draft.candidates = insertCandidates(members, [
-    ...new Set([idField, ...clocks, ...scalars]),
-  ]);
+  const generated = explained.rules.some(
+    (rule) =>
+      rule.rule === "identity" &&
+      rule.field === idField &&
+      rule.generator !== "sequence",
+  );
+  draft.candidates = insertCandidates(
+    members,
+    [...new Set([idField, ...clocks, ...scalars])],
+    {
+      ...(generated && randomIdentities(members, idField, clocks)
+        ? { random: idField }
+        : {}),
+      created: evidence.observed.object,
+    },
+  );
   retainFixed(context, explained.body.fixed);
+  for (const member of keptOrders(evidence.call.body, evidence.observed.object))
+    draft.kept.add(member);
   Object.assign(draft.plan, {
     exemplar_ordinal: step.record.ordinal,
     observation: {
       ordinal: evidence.observed.ordinal,
       pointer: evidence.observed.pointer,
+      ...(evidence.observed.read === undefined
+        ? {}
+        : { read: evidence.observed.read }),
     },
     response: context.io.withBody(step.record.ordinal, (body) =>
       responseShapeOf(
@@ -153,12 +385,20 @@ const buildCreate = (
         { idField, id: evidence.observed.id },
       ),
     ),
-    body: explained.body,
+    body: {
+      ...explained.body,
+      ...(evidence.envelope === undefined
+        ? {}
+        : { envelope: evidence.envelope }),
+    },
     rules: explained.rules,
-    collection: explained.tied ? evidence.collection : null,
+    collection:
+      explained.tied || draft.linked !== undefined ? evidence.collection : null,
     insert: draft.candidates[0]!,
   });
   draft.observed = evidence.observed.object;
+  for (const entity of held) noteFixedWidths(draft.fixedWidth, entity);
+  return true;
 };
 
 type SequenceRule = Extract<FieldRule, { rule: "sequence" }>;
@@ -206,21 +446,62 @@ const followsSequences = (
     );
   });
 
-/** Whether a later call's generated values take the forms serving generates them in: clocks in the learned format, unique values and UUID identities as UUIDs, and sequences in order. */
-const followsGenerated = (
+/** Whether a later call's rules reproduce its observed fields and its omitted members agree with the learned defaults. */
+const agreesLater = (
   context: EffectContext,
   draft: WriteDraft,
   created: Pick<StateEntity, "type" | "collection" | "fields">,
+  call: { readonly body: JsonObject; readonly observed: JsonObject },
+): boolean =>
+  followsCreateRules(context, draft, { ...created, observed: call.observed }) &&
+  !contradictsDefault(draft.plan.rules, call, created.fields);
+
+/** Whether an echoed member the call left out was stored otherwise than its learned default. */
+const contradictsDefault = (
+  rules: readonly FieldRule[],
+  call: { readonly body: JsonObject; readonly observed: JsonObject },
+  written: JsonObject,
+): boolean =>
+  rules.some(
+    (rule) =>
+      rule.rule === "echo" &&
+      !Object.hasOwn(call.body, rule.field) &&
+      Object.hasOwn(call.observed, rule.field) &&
+      !same(call.observed[rule.field], written[rule.field]),
+  );
+
+/** Whether a later create preserves generation shapes and its derived fields reproduce the captured observation. */
+const followsCreateRules = (
+  context: EffectContext,
+  draft: WriteDraft,
+  created: Pick<StateEntity, "type" | "collection" | "fields"> & {
+    readonly observed: JsonObject;
+  },
 ): boolean =>
   draft.plan.rules.every((rule) => {
     const value = created.fields[rule.field];
+    const exemplar = draft.observed?.[rule.field];
+    if (rule.rule === "composed" || rule.rule === "reference")
+      return (
+        !Object.hasOwn(created.observed, rule.field) ||
+        value === created.observed[rule.field] ||
+        (rule.rule === "reference" && same(value, created.observed[rule.field]))
+      );
     if (rule.rule === "clock")
       return (
-        JSON.stringify(readClock(value)?.format) === JSON.stringify(rule.format)
+        fittedClockFormat(
+          rule.format,
+          value,
+          clockEvidence(draft, rule.field),
+        ) !== undefined
       );
     if (rule.rule === "unique")
       return (
-        isUuid(value) &&
+        (isUuid(exemplar)
+          ? isUuid(value)
+          : generatedIntegerDigits(exemplar) !== undefined
+            ? likeGeneratedInteger(value, exemplar)
+            : isOpaqueToken(value, exemplar)) &&
         !context.state
           .ofType(created.type)
           .some((held) => held.fields[rule.field] === value)
@@ -229,6 +510,28 @@ const followsGenerated = (
       rule.rule !== "identity" || rule.generator !== "uuid" || isUuid(value)
     );
   }) && followsSequences(context, draft, created);
+
+/** Widen the plan's clock formats to the trimmed spelling a later call showed, and its other clocks with them unless a value the plan saw shows them at a fixed width. */
+const fitClocks = (draft: WriteDraft, fields: JsonObject): void => {
+  const fitted = draft.plan.rules.map((rule) => {
+    if (rule.rule !== "clock") return rule;
+    const format = fittedClockFormat(
+      rule.format,
+      fields[rule.field],
+      clockEvidence(draft, rule.field),
+    );
+    return format === undefined || format === rule.format
+      ? rule
+      : { ...rule, format };
+  });
+  draft.plan.rules = siblingTrimmedClocks(
+    fitted,
+    draft.observed,
+    fields,
+    Object.fromEntries(draft.fixedWidth),
+  );
+  noteFixedWidths(draft.fixedWidth, fields);
+};
 
 /** Record the values a create's sequences took, which the next call follows. */
 const takeSequences = (
@@ -302,6 +605,20 @@ const servedCollection = (
     : selectedCollection(segments, createCandidates(context, type));
 };
 
+/** Whether a linked create's call sends the source path values its exemplar did, the only ones its link holds for. */
+const fromLinkedSource = (
+  context: EffectContext,
+  draft: WriteDraft,
+  step: WriteStep,
+): boolean =>
+  sameLinkedSource(
+    step.tool.path_template,
+    context.records.find(
+      (record) => record.ordinal === draft.plan.exemplar_ordinal,
+    )?.path,
+    recordedPathValues(step.tool.path_template, step.record.path),
+  );
+
 /** Add a created entity to the state at the plan's insert position, or last before the plan has one. */
 const insertCreated = (
   context: EffectContext,
@@ -331,19 +648,23 @@ export const applyCreate = (
   const idField = context.idField(type);
   const spelled = normalizedPath(step.record.path);
   // Serving writes a create into the collection it chooses for the path, and a tied plan refuses any other, so a create there is not counted.
-  const collection = servedCollection(context, step, type) ?? spelled;
+  const collection =
+    draft.linked ?? servedCollection(context, step, type) ?? spelled;
+  // A linked plan's collection holds only for its exemplar's source path, so serving refuses any other.
   if (
     built(draft) &&
-    draft.plan.collection !== null &&
-    draft.plan.collection !== collection
+    ((draft.plan.collection !== null && draft.plan.collection !== collection) ||
+      (draft.linked !== undefined && !fromLinkedSource(context, draft, step)))
   )
     return UNKNOWN;
-  const body = requestObject(context, step.record);
   const observed = createdObservation(context, step, {
     type,
     collection,
     idField,
+    linked: draft.linked !== undefined,
   });
+  const request = requestBodyPlan(context, step, draft, observed?.object);
+  const body = request?.object;
   if (observed === undefined) {
     fail(draft, step, body === undefined ? "body-unusable" : "no-observation");
     return UNKNOWN;
@@ -375,33 +696,87 @@ export const applyCreate = (
   const call = { ...callOf(step, body), body };
   // The exemplar defines the plan's sequences; each later call must follow them.
   const later = built(draft);
-  if (!later) buildCreate(context, draft, step, { observed, call, collection });
+  if (
+    later &&
+    (draft.plan.rules.some(
+      (rule) =>
+        rule.rule === "unique" &&
+        linkedGenerated(
+          rule.field,
+          observed.object,
+          fieldsOf(context.state.ofType(type)),
+        ),
+    ) ||
+      strandedInteger(draft.plan.rules, observed.object))
+  ) {
+    refuse(draft, step, "unexplained-change");
+    return recorded();
+  }
+  if (
+    !later &&
+    !buildCreate(context, draft, step, {
+      observed,
+      call,
+      collection,
+      envelope: request?.envelope,
+    })
+  )
+    return recorded();
   // Rules learn from the recorded path; serving fills path fields from the collection it selects.
   const created = {
     ...call,
     pathValues:
       pathValuesOf(step.tool.path_template, collection) ?? call.pathValues,
   };
-  const fields = createdFields(draft.plan, draft.observed!, created, (rule) =>
-    ok(observed.object[rule.field] ?? null),
-  );
+  const fieldsOfCall = () =>
+    createdFields(
+      draft.plan,
+      draft.observed!,
+      created,
+      (rule) =>
+        recordedGeneratedValue(
+          rule,
+          draft.observed![rule.field],
+          observed.object[rule.field] ?? null,
+        ),
+      referencedIn(context),
+    );
+  // A later call that agrees with the plan widens it, as a later update does: to members it alone sent or left out, an
+  // array it showed sorted, or a clock spelling. One that disagrees leaves the plan as it was.
+  if (later)
+    refineCreate(context, draft, step, {
+      observed,
+      call,
+      collection,
+      envelope: request?.envelope,
+    });
+  const fields = fieldsOfCall();
   const id = fields.ok ? scalarText(fields.value[idField]) : undefined;
   if (
     !fields.ok ||
     id === undefined ||
     context.state.entity(type, collection, id) !== undefined ||
     (later &&
-      !followsGenerated(context, draft, {
-        type,
-        collection,
-        fields: fields.value,
-      }))
+      !agreesLater(
+        context,
+        draft,
+        { type, collection, fields: fields.value },
+        { body: call.body, observed: observed.object },
+      ))
   ) {
     refuse(draft, step, "unexplained-change");
     return recorded();
   }
   takeSequences(draft, { collection, fields: fields.value });
-  const inserted = insertCreated(context, draft, entity(fields.value, id));
+  fitClocks(draft, fields.value);
+  // The call's own values follow the forms serving generates; the state holds a nested clock as the read-back restamped it, as an update's.
+  const stored = restampedFields(
+    searchFrom(context, step),
+    itemReads(context, { type, idField, collection, id }),
+    fields.value,
+    draft.plan.rules,
+  );
+  const inserted = insertCreated(context, draft, entity(stored, id));
   return {
     kind: "applied",
     targets: [inserted, collectionTarget(type, collection)],

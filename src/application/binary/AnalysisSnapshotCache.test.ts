@@ -174,7 +174,7 @@ it.each(["provider", "workflow"] as const)(
     };
     const nameImport = ledger.import(createEvidenceBundle([nameOnly]));
     if (!nameImport.ok) throw nameImport.error;
-    cache.refreshEvidenceDisplay(nameImport.value.replacements);
+    cache.refreshEvidenceMetadata(nameImport.value.replacements);
     expect(cache.entries()).toEqual(before.value.entries);
     expect(cache.workflowEntries()).toEqual(before.value.workflow_entries);
     // A different observation for this exact query is not the entry's dependency.
@@ -201,7 +201,7 @@ it.each(["provider", "workflow"] as const)(
       createEvidenceBundle([relocate(alternative)]),
     );
     if (!foreign.ok) throw foreign.error;
-    cache.refreshEvidenceDisplay(foreign.value.replacements);
+    cache.refreshEvidenceMetadata(foreign.value.replacements);
     expect(cache.entries()).toEqual(before.value.entries);
     expect(cache.workflowEntries()).toEqual(before.value.workflow_entries);
     // A result may cite several observations; updating their envelopes does not change its payload.
@@ -209,13 +209,13 @@ it.each(["provider", "workflow"] as const)(
       createEvidenceBundle(dependencies.map(relocate)),
     );
     if (!dependentImport.ok) throw dependentImport.error;
-    cache.refreshEvidenceDisplay(dependentImport.value.replacements);
+    cache.refreshEvidenceMetadata(dependentImport.value.replacements);
     expect(cache.entries()).toEqual(before.value.entries);
     expect(cache.workflowEntries()).toEqual(before.value.workflow_entries);
     const relocated = relocate(evidence);
     const imported = ledger.import(createEvidenceBundle([relocated]));
     if (!imported.ok) throw imported.error;
-    cache.refreshEvidenceDisplay(imported.value.replacements);
+    cache.refreshEvidenceMetadata(imported.value.replacements);
     const after = cache.export(target, profile, ledger.export());
     if (!after.ok) throw after.error;
     const entries =
@@ -928,6 +928,63 @@ it("does not replay pre-envelope call graphs under the revised workflow profile"
       normalized_result: oldResult,
     }).success,
   ).toBe(false);
+});
+
+it("declines source-bearing snapshot entries while replaying omitted and empty source controls", () => {
+  const cache = new AnalysisSnapshotCache();
+  const target = ANALYSIS_SNAPSHOT_TARGET;
+  const profile = ANALYSIS_SNAPSHOT_PROFILE;
+  const source = createEvidence(target, ANALYSIS_SNAPSHOT_PROVIDER, {
+    operation: "source",
+    parameters: {},
+    result: "observed source",
+  });
+  const parameters = { address: "0x1000", document: "fixture" };
+  cache.record({
+    target,
+    profile,
+    operation: "procedure_info",
+    parameters,
+    execution: createAnalysisExecution(
+      "parent observation",
+      ANALYSIS_SNAPSHOT_PROVIDER,
+      {
+        subject: target,
+        analysisProfile: profile,
+        sourceEvidence: [source],
+      },
+    ),
+  });
+  expect(
+    cache.lookup(target, profile, "procedure_info", parameters),
+  ).toBeUndefined();
+  expect(cache.entries()).toEqual([]);
+
+  for (const sourceEvidence of [undefined, []] as const) {
+    const control = {
+      address: sourceEvidence === undefined ? "0x2000" : "0x3000",
+      document: "fixture",
+    };
+    cache.record({
+      target,
+      profile,
+      operation: "procedure_info",
+      parameters: control,
+      execution: createAnalysisExecution(
+        "source-free observation",
+        ANALYSIS_SNAPSHOT_PROVIDER,
+        {
+          subject: target,
+          analysisProfile: profile,
+          ...(sourceEvidence === undefined ? {} : { sourceEvidence }),
+        },
+      ),
+    });
+    expect(
+      cache.lookup(target, profile, "procedure_info", control)?.result,
+    ).toBe("source-free observation");
+  }
+  expect(cache.entries()).toHaveLength(2);
 });
 
 describe("executions that report truncated references", () => {

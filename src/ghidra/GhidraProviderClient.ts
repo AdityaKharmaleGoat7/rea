@@ -1,3 +1,4 @@
+import { analysisSettingLimit } from "../domain/analysisSettingDefinitions.js";
 import { z } from "zod";
 import { analysisErrorWithCleanupFailure } from "../domain/analysisErrorCleanup.js";
 import { artifactFilePrimaryFacts } from "../artifacts/ArtifactFileOperation.js";
@@ -28,7 +29,17 @@ import {
   ghidraDisabledAnalyzerFailure,
   ghidraDisabledAnalyzerLimitations,
 } from "./GhidraDisabledAnalyzers.js";
-import { ghidraPinnedMipsLanguage } from "./GhidraMipsProfile.js";
+import {
+  ghidraMipsProfileMismatchReason,
+  ghidraPinnedMipsLanguage,
+  GHIDRA_MIPS_SOFT_FLOAT_STORAGE,
+  ghidraMips1Limitations,
+  ghidraMipsSoftFloatFailure,
+  ghidraMipsRelocatableLimitations,
+  ghidraMipsSharedLimitations,
+  ghidraMipsSoftFloatLimitations,
+  isGhidraMipsSoftFloatTarget,
+} from "./GhidraMipsProfile.js";
 import type { AnalysisProfileCommitment } from "../domain/analysisProfile.js";
 import type { BinaryTarget } from "../domain/binaryTargetTypes.js";
 import {
@@ -39,6 +50,7 @@ import {
   AnalysisInputError,
   AnalysisResourceConstraintError,
   AnalysisTimeoutError,
+  resourceConstraintRecovery,
 } from "../domain/analysisErrorCore.js";
 import type { AnalysisError } from "../domain/analysisErrorBase.js";
 import type { EvidenceLocation } from "../domain/evidence.js";
@@ -72,14 +84,6 @@ import {
   GHIDRA_PSP_LIMITATIONS,
 } from "./GhidraPspProfile.js";
 import { ghidraPspExtensionSchema } from "./GhidraPspExtension.js";
-import {
-  GHIDRA_MIPS_SOFT_FLOAT_STORAGE,
-  ghidraMipsSoftFloatFailure,
-  ghidraMipsRelocatableLimitations,
-  ghidraMipsSharedLimitations,
-  ghidraMipsSoftFloatLimitations,
-  isGhidraMipsSoftFloatTarget,
-} from "./GhidraMipsProfile.js";
 import { ghidraRiscvLimitations } from "./GhidraRiscvProfile.js";
 import { ghidraPePdbLimitations } from "./GhidraPeProfile.js";
 import { unverifiedGhidraBuildLimitation } from "./GhidraReleasePolicy.js";
@@ -95,6 +99,7 @@ import {
 } from "./GhidraProviderCapabilities.js";
 import {
   GHIDRA_STARTUP_DEADLINE_ELAPSED,
+  isGhidraInputFailureCode,
   type GhidraSessionError,
 } from "./GhidraSessionError.js";
 import type { GhidraSessionInfo } from "./GhidraSessionValues.js";
@@ -106,6 +111,7 @@ import {
 } from "./extensions/GhidraExtensions.js";
 import { inspectWindowsNativeReadiness } from "../process/WindowsAuthority.js";
 import { ghidraRawBinaryLanguage } from "./GhidraRawBinaryLanguage.js";
+import { ghidraDolLanguage, ghidraDolSectionFile } from "./GhidraDolProfile.js";
 
 /** Production seam for exercising provider projection without a real process. */
 export type GhidraProviderClientFactory = (
@@ -119,6 +125,7 @@ export type GhidraProviderClientFactory = (
       | "runtimeLineage"
       | "readTargetSnapshot"
       | "hashTargetSnapshot"
+      | "hashTargetSnapshotRanges"
       | "attestDosTargetSnapshot"
     >
   >;
@@ -261,6 +268,16 @@ export const createGhidraProviderClient = (input: {
     );
   // Both caller-selected and provider-pinned languages use the validated
   // committed slot; the profile cannot supply its own applicability proof.
+  const mipsProfileMismatch = ghidraMipsProfileMismatchReason(
+    target,
+    committedProfile.parameters,
+  );
+  if (mipsProfileMismatch !== null)
+    return err(
+      new ProviderAdapterError("ghidra", "open_binary", {
+        diagnostics: { reason: mipsProfileMismatch },
+      }),
+    );
   const importLanguage = parameterLanguage;
   const disabledAnalyzers = ghidraProfileDisabledAnalyzers(
     committedProfile.parameters,
@@ -313,6 +330,13 @@ export const createGhidraProviderClient = (input: {
           "Static DOS analysis does not emulate BIOS, DOS interrupts, device ports, or self-modifying unpacking code. Packed targets require a separately identified unpacked artifact for original-program analysis; appended overlays are not the initialized load module.",
         ]
       : []),
+    ...(target.format === "gamecube-dol"
+      ? [
+          "GameCube DOL analysis maps the header's text and data sections at their load addresses; file bytes outside those sections (the 256-byte header and any padding) are not mapped.",
+          "The default language is stock Ghidra PowerPC:BE:32:default. Broadway-specific paired-single and Gekko instructions are not decoded unless REA_GHIDRA_LANGUAGE_ID selects an installed variant such as PowerPC:BE:32:Gekko_Broadway.",
+          "BSS is mapped uninitialized only outside the data sections it overlaps. The DOL header is not an identification of the producing SDK, and no runtime initialization, OS, or hardware state is modeled.",
+        ]
+      : []),
     ...(target.format === "raw-binary"
       ? [
           "Headerless raw-binary analysis uses the caller-supplied architecture and entry address; file offset 0 is mapped at that address. Headers are not discovered from file bytes.",
@@ -328,6 +352,11 @@ export const createGhidraProviderClient = (input: {
           "Floating-point ABI semantics are unverified for this recordless legacy admission.",
         ]
       : []),
+    ...ghidraMips1Limitations(
+      target,
+      importLanguage,
+      pinnedLanguage !== undefined,
+    ),
     ...ghidraMipsRelocatableLimitations(target),
     ...ghidraMipsSharedLimitations(target),
     ...ghidraRiscvLimitations(target),
@@ -349,6 +378,8 @@ export const createGhidraProviderClient = (input: {
     );
   const client = clientFactory({
     startupTimeoutMs: config.ghidraStartupTimeoutMs,
+    readStartupTimeoutMs: () => config.ghidraStartupTimeoutMs,
+    bridgeMaxRequestBytes: config.bridgeMaxRequestBytes,
     platform: installation.platform,
     launcher: new GhidraHeadlessLauncher({
       environment: input.environment,
@@ -380,9 +411,16 @@ export const createGhidraProviderClient = (input: {
               baseAddr: target.entryPoint,
             },
           }),
-      ...(importLanguage === undefined
-        ? {}
-        : { languageOverride: importLanguage }),
+      ...(target.format === "gamecube-dol"
+        ? {
+            gamecubeDol: {
+              ...ghidraDolLanguage(importLanguage),
+              sectionFile: ghidraDolSectionFile(target.dol),
+            },
+          }
+        : importLanguage === undefined
+          ? {}
+          : { languageOverride: importLanguage }),
       ...(config.ghidraDisabledAnalyzers === undefined
         ? {}
         : { disabledAnalyzers: config.ghidraDisabledAnalyzers }),
@@ -604,6 +642,7 @@ export const createGhidraProviderClient = (input: {
       operation,
       measured: observed,
       client,
+      languageOverride: importLanguage,
       mapSessionError: (failure) =>
         projectSessionError(operation, failure, config, lostProviderHealth()),
       nativeAotResult: derived,
@@ -659,6 +698,7 @@ export const createGhidraProviderClient = (input: {
         if (!started.ok) return started;
       }
       const called = await client.callTool(operation, input.value, {
+        decompileTimeoutSeconds: config.ghidraDecompileTimeoutSeconds ?? null,
         ...(options?.signal === undefined ? {} : { signal: options.signal }),
         ...(options?.progress === undefined
           ? {}
@@ -897,6 +937,17 @@ const projectPrimarySessionError = (
   const { cause: physicalCause, origin } = artifactFilePrimaryFacts(
     failure.cause,
   );
+  // A client-side ceiling refusal travels as the cause; re-attribute it to this
+  // operation so callers see a typed resource constraint rather than a generic
+  // session failure, matching how Hopper and Cutter report the same ceiling.
+  if (physicalCause instanceof AnalysisResourceConstraintError)
+    return new AnalysisResourceConstraintError(
+      operation,
+      physicalCause.resource,
+      physicalCause.reason,
+      physicalCause.reportedLimits,
+      { ...context, ...resourceConstraintRecovery(physicalCause) },
+    );
   if (
     origin === "owned-or-classified" &&
     physicalCause instanceof AnalysisAccessDeniedError
@@ -959,12 +1010,17 @@ const projectPrimarySessionError = (
       limits.ghidraDecompileTimeoutSeconds * 1000,
       {
         ...context,
+        limit: analysisSettingLimit(
+          "ghidra.decompile_timeout_seconds",
+          limits.ghidraDecompileTimeoutSeconds,
+          undefined,
+        ),
         userMessage: `${failure.message.trim().replace(/\.$/u, "")}. ${ghidraSessionContinuationMessage(
           failure,
           "Only this procedure's decompilation was stopped; the Ghidra session remains usable.",
         )}`,
         remediationAction:
-          "Use analyze_function (CLI: `rea function`) for listing facts. Raise REA_GHIDRA_DECOMPILE_TIMEOUT_SECONDS and restart REA. Set the MCP tool-call deadline to cover startup and the full call; earlier cancellation closes the session. `rea setup` estimates deadlines for new Codex/Kimi registrations and preserves existing positive values; edit existing deadlines yourself.",
+          "Use analyze_function (CLI: `rea function`) for listing facts. Call update_analysis_settings with setting ghidra.decompile_timeout_seconds and action set to raise the per-function deadline for the next operation on this Program. For CLI or future REA processes, set REA_GHIDRA_DECOMPILE_TIMEOUT_SECONDS. Set the MCP tool-call deadline to cover startup and the full call; earlier cancellation closes the session. `rea setup` estimates deadlines for new Codex/Kimi registrations and preserves existing positive values; edit existing deadlines yourself.",
       },
     );
   if (failure.kind === "analysis_timeout")
@@ -991,12 +1047,7 @@ const projectPrimarySessionError = (
           "Retry this search in literal mode or simplify the regex.",
       },
     );
-  if (
-    failure.kind === "remote" &&
-    ["invalid_request", "not_found", "ambiguous"].includes(
-      failure.remoteCode ?? "",
-    )
-  )
+  if (failure.kind === "remote" && isGhidraInputFailureCode(failure.remoteCode))
     return new AnalysisInputError(operation, context, [
       { path: [], reason: "invalid_value", message: failure.message },
     ]);
@@ -1245,8 +1296,13 @@ const projectSigkill = (
 
 /** Name the settings that change Ghidra's import-and-analysis startup deadline. */
 const ghidraStartupTimeoutGuidance = (timeoutMs: number) => ({
+  limit: analysisSettingLimit(
+    "ghidra.startup_timeout_ms",
+    timeoutMs,
+    undefined,
+  ),
   userMessage: `Ghidra did not finish importing and analyzing the target within its configured ${String(timeoutMs)} ms startup deadline (REA_GHIDRA_STARTUP_TIMEOUT_MS).`,
-  remediationAction: `Large binaries can need longer: set REA_GHIDRA_STARTUP_TIMEOUT_MS above ${String(timeoutMs)} in REA's launch environment; REA_GHIDRA_DISABLED_ANALYZERS can skip selected expensive analyzers with reduced coverage. Before restarting, export useful Evidence and close the binary; resolve any cleanup failure. Then restart REA, reconnect the MCP client if used, and reopen the target. Reopening alone keeps the current server settings and repeats import from scratch. The MCP client's tool-call deadline must also allow startup and the query.`,
+  remediationAction: `Large binaries can need longer: use update_analysis_settings with setting ghidra.startup_timeout_ms and action set above ${String(timeoutMs)}, or set REA_GHIDRA_STARTUP_TIMEOUT_MS in the launch environment for future REA processes; REA_GHIDRA_DISABLED_ANALYZERS can skip selected expensive analyzers with reduced coverage. Export useful Evidence and resolve any retained cleanup before starting a new provider attempt. Runtime updates apply to the next startup attempt without restarting REA. Reopening repeats import from scratch. The MCP client's tool-call deadline must also allow startup and the query.`,
 });
 
 /** A provider already observed as running can be restarted by reopening. */

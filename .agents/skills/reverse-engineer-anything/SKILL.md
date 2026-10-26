@@ -1,8 +1,8 @@
 ---
 name: reverse-engineer-anything
-description: Reverse engineer native, managed, Electron/JavaScript, packaged, firmware, and browser targets with REA. Use shipped-artifact or requested runtime evidence to explain features, compare versions, decompile code, or guide a reconstruction. Skip REA for ordinary source-repository architecture analysis.
+description: Reverse engineer native, managed, Electron/JavaScript, packaged, firmware, and browser targets with REA, and build agent environments (AgentEnv bundles) of web applications from a live instance or a capture. Use shipped-artifact or requested runtime evidence to explain features, compare versions, decompile code, or guide a reconstruction. Skip REA for ordinary source-repository architecture analysis.
 metadata:
-  version: "46"
+  version: "49"
 ---
 
 # REA
@@ -133,6 +133,9 @@ explicit path or endpoint and do not need it.
   `capture_browser_scenario` with declared actions. See
   [runtime observation](references/runtime-observation.md) for connect/launch
   and the focused follow-up browser tools.
+- Agent environment (AgentEnv bundle) of a web application: read
+  [environments](references/environments.md) before recording; it records with
+  `capture_browser_scenario` and writes the bundle with `export_environment_bundle`.
 - Fiddler Everywhere traffic or a native `.saz` capture: read the
   [Fiddler workflow](references/runtime-observation.md#fiddler-everywhere-traffic-debugging).
   Inspect saved SAZ with `inspect_web_network_capture` and `format: "saz"`;
@@ -259,12 +262,38 @@ explicit path or endpoint and do not need it.
   proof the image never imported APIs through another table. Bound snapshots
   and loaded IAT contents remain unobserved. See the
   [PE import guide](https://github.com/morluto/rea/blob/main/docs/pe-imports.md).
+- PE TLS callbacks and load configuration: `inspect_pe_load_config` with the
+  explicit local PE32/PE32+ file. This built-in target-free inspection requires
+  no Windows SDK. Preserve callback VAs as strings with their RVA, file offset
+  and section, and the size-covered security cookie, SafeSEH, CFG,
+  EH-continuation and XFG fields. Guard-flag mitigation claims are inferred
+  linker declarations, not proof of enforcement. A missing directory is observed
+  absence of that declaration. See the
+  [PE load configuration guide](https://github.com/morluto/rea/blob/main/docs/pe-load-config.md).
 - ELF note tables: `inspect_elf_notes` with the explicit local ELF32/ELF64
   file. This built-in target-free inspection requires no disassembler. Preserve
   PT_NOTE and SHT_NOTE ranges, owners, types, descriptor SHA-256, and GNU
   build-id or ABI-tag fields. A missing table is observed absence of those
   declarations, not proof the image never carried notes. See the
   [ELF notes guide](https://github.com/morluto/rea/blob/main/docs/elf-notes.md).
+- Apple `.ips` crash reports: `inspect_apple_ips` with the explicit local
+  file. This built-in target-free inspection requires no Xcode, atos, or
+  pwntools. Preserve first-line metadata, `bug_type` as a string, process and
+  exception facts, lossless integer registers, usedImages UUIDs, and
+  documented classification matches. Only `bug_type` `"309"` yields a crash
+  body; other types, including `"288"` stackshots, return no crash result.
+  Opened Mach-O and dSYM UUID joins remain unobserved. See the
+  [Apple IPS guide](https://github.com/morluto/rea/blob/main/docs/apple-ips.md).
+- Linux kernel module metadata: `inspect_kernel_module` with the explicit local
+  ELF32/ELF64 relocatable file. This built-in target-free inspection requires
+  no Linux host or `modinfo`. Preserve `.modinfo` key order and duplicate keys,
+  `__versions` CRC hex, section file ranges, and the appended signature
+  trailer's PKCS#7 SHA-256. A missing section is observed absence when section
+  names are known, not proof the module never carried that metadata.
+  `struct module` is not decoded. The signature is not validated. gzip, xz, and
+  zstd containers are unsupported; decompress into a separate file with an
+  external codec utility, then inspect the decompressed `ET_REL` image. See the
+  [kernel module guide](https://github.com/morluto/rea/blob/main/docs/kernel-modules.md).
 - CPython 3.7–3.13 `.pyc` header, nested marshal code objects and bytecode
   identity: `inspect_python_pyc` with the explicit local file. This built-in
   target-free inspection requires no Python installation. Preserve magic,
@@ -345,18 +374,23 @@ native target whose analysis tool operates on the active target. Do not call an
 unadvertised tool; inspect `binary_session` with `{}` and its
 `result.tool_availability` for availability reasons and remediation. Expand each
 group's `names` into entries, inheriting the inventory-level client requirements
-unless the group overrides them. In its closed effect and annotation vocabularies,
-listed flags are true and omitted known flags are false. The grouped name union
-is the complete tool inventory; use `tools/list` for canonical tool schemas.
-Provider candidate facts describe possible providers, while top-level session
-capabilities describe the current route and `analysis_provider_binding` names the
-selected provider. Do not treat those scopes as interchangeable.
+unless the group overrides them. The grouped name union is the complete tool
+inventory; use `tools/list` for canonical tool schemas. The default summary keeps
+each provider candidate's availability and target-support status, code and
+reason; `omitted_fields` lists what it leaves out. Request `{"detail": "complete"}`
+only when you need provider diagnostics, candidate capability sets, or tool
+surface, effect and annotation flags; in those closed flag vocabularies, listed
+flags are true and omitted known flags are false. Provider candidate facts
+describe possible providers, while top-level session capabilities describe the
+current route and `analysis_provider_binding` names the selected provider. Do
+not treat those scopes as interchangeable.
 
 For a Ghidra startup timeout on a large native target, follow
 [deadline recovery](references/native-and-artifacts.md#ghidra-startup-deadline-recovery)
 before abandoning deep analysis or repeating the same cold import. The default
-330 seconds is configurable; changing the server's environment requires a new
-REA process.
+330 seconds can be changed for new startup attempts through
+`update_analysis_settings` using `ghidra.startup_timeout_ms`. Changing the
+server's launch environment instead requires a new REA process.
 
 ## Work summary-first
 
@@ -463,6 +497,9 @@ as complete while required questions remain open.
   [references/runtime-observation.md](references/runtime-observation.md)
 - Evidence paging, comparisons, residual unknowns, and verification:
   [references/evidence-workflows.md](references/evidence-workflows.md)
+- Agent environments (AgentEnv bundles) of a web application, recorded from
+  a live instance or a HAR:
+  [references/environments.md](references/environments.md)
 
 ## Finish the task
 

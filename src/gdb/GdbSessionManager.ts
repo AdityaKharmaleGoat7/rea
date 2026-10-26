@@ -1,3 +1,4 @@
+import { ABORTED, waitForAbortable } from "../process/AbortablePromise.js";
 import { snapshotGdbCommandRecords } from "./GdbCommandRecords.js";
 import { randomUUID } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
@@ -696,7 +697,11 @@ export class GdbSessionManager {
     >
   > {
     if (signal?.aborted)
-      return err(new AnalysisCancelledError("start_gdb_session"));
+      return err(
+        new AnalysisCancelledError("start_gdb_session", {
+          cause: signal.reason,
+        }),
+      );
     const occupied = this.#sessions.size + this.#sessionReservations;
     if (occupied >= this.#maxSessions)
       return err(
@@ -896,7 +901,11 @@ export class GdbSessionManager {
         session.startupResolve = resolve;
         session.startupReject = reject;
         startupAbortListener = () =>
-          reject(new AnalysisCancelledError("start_gdb_session"));
+          reject(
+            new AnalysisCancelledError("start_gdb_session", {
+              cause: signal?.reason,
+            }),
+          );
         signal?.addEventListener("abort", startupAbortListener, {
           once: true,
         });
@@ -923,7 +932,9 @@ export class GdbSessionManager {
         startupTimer.unref();
       });
       if (signal?.aborted)
-        throw new AnalysisCancelledError("start_gdb_session");
+        throw new AnalysisCancelledError("start_gdb_session", {
+          cause: signal.reason,
+        });
       const autoLoad = await this.#request(
         session,
         "-gdb-set auto-load off",
@@ -977,11 +988,15 @@ export class GdbSessionManager {
         session.inferiorTtyVerified = true;
       }
       if (signal?.aborted)
-        throw new AnalysisCancelledError("start_gdb_session");
+        throw new AnalysisCancelledError("start_gdb_session", {
+          cause: signal.reason,
+        });
       // Give queued exit notifications a turn before publishing startup.
       await new Promise<void>((resolve) => setImmediate(resolve));
       if (signal?.aborted)
-        throw new AnalysisCancelledError("start_gdb_session");
+        throw new AnalysisCancelledError("start_gdb_session", {
+          cause: signal.reason,
+        });
       if (session.exited || session.protocolError !== undefined)
         throw new Error(
           session.protocolError ?? "GDB exited during startup readiness.",
@@ -1437,12 +1452,17 @@ export class GdbSessionManager {
               throw new Error(
                 "GDB returned an unknown inferior list before shutdown.",
               );
-            if (groupCount > 0 && !session.inferiorTtyVerified)
+            if (
+              groupCount > 1 ||
+              (groupCount > 0 && !session.inferiorTtyVerified)
+            )
               return err(
                 new AnalysisCapabilityUnavailableError(
                   GDB_PROVIDER_IDENTITY.id,
                   "close_gdb_session",
-                  "Live GDB inferiors require an explicit disposition because no durable inferior TTY is verified.",
+                  groupCount > 1
+                    ? "Multiple live GDB inferiors require an explicit disposition because automatic detach supports only one inferior."
+                    : "Live GDB inferiors require an explicit disposition because no durable inferior TTY is verified.",
                   {
                     retryable: true,
                     userMessage:
@@ -2411,25 +2431,8 @@ export const waitForGdbCommandTurn = (
   signal?: AbortSignal,
 ): Promise<void> => {
   if (signal === undefined) return previous;
-  if (signal.aborted)
-    return Promise.reject(
-      new AnalysisCancelledError("gdb_console", { cause: signal.reason }),
-    );
-  return new Promise<void>((resolve, reject) => {
-    const onAbort = (): void =>
-      reject(
-        new AnalysisCancelledError("gdb_console", { cause: signal.reason }),
-      );
-    signal.addEventListener("abort", onAbort, { once: true });
-    previous.then(
-      () => {
-        signal.removeEventListener("abort", onAbort);
-        resolve();
-      },
-      (cause: unknown) => {
-        signal.removeEventListener("abort", onAbort);
-        reject(cause);
-      },
-    );
+  return waitForAbortable(previous, signal).then((outcome) => {
+    if (outcome === ABORTED)
+      throw new AnalysisCancelledError("gdb_console", { cause: signal.reason });
   });
 };

@@ -1,4 +1,4 @@
-import type { ToolResultDelivery } from "./toolResult.js";
+import type { ToolResultDelivery } from "./ToolResultDelivery.js";
 import type { EvidenceMcpServer } from "./EvidenceMcpServer.js";
 import {
   projectRetainedAnalysis,
@@ -39,8 +39,10 @@ import {
 } from "./toolRegistrationOptions.js";
 import type { WithAdmittedAnalysis } from "./analysisAdmission.js";
 import { runAdmittedToolOperation } from "./admittedToolOperation.js";
-import { createEvidenceToolHandler } from "./contractToolHandler.js";
-import { deliverEvidenceResult } from "./contractToolHandler.js";
+import {
+  createEvidenceToolHandler,
+  deliverEvidenceResult,
+} from "./contractToolHandler.js";
 
 interface ElectronToolRegistration {
   readonly artifactResources: ArtifactResourceScope;
@@ -127,7 +129,14 @@ export const registerElectronTools = (
           const analyzed = await analyzeJavaScriptApplicationValidated(
             request,
             options.artifactResources,
-            { signal, progress, environment: options.environment },
+            {
+              signal,
+              progress,
+              environment: options.environment,
+              ...(server.analysisSettings === undefined
+                ? {}
+                : { settings: server.analysisSettings.read }),
+            },
           );
           return detail === "summary" && analyzed.ok
             ? projectRetainedAnalysis(

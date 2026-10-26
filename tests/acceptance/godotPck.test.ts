@@ -67,6 +67,7 @@ cliTest.for([2, 3, 4] as const)(
         source_path: member.path,
         flags: 0,
       });
+      expect(row?.source_path).toBe(member.path);
       expect(row?.hash_status).toBe("verified");
     }
     const extracted = await cli.run({
@@ -342,7 +343,7 @@ cliTest(
     );
     const before = await readFile(bundle);
     expect((await cli.run({ arguments: args })).exitCode).toBe(1);
-    expect(await readFile(bundle)).toEqual(before);
+    expect(Buffer.compare(await readFile(bundle), before)).toBe(0);
     await unlink(source);
     const query = join(root, "query.json");
     await writeFile(

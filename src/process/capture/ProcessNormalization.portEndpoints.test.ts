@@ -1,9 +1,9 @@
 import { expect, it } from "vitest";
 
 import { createBoundedProcessTextNormalizer } from "./ProcessNormalization.js";
-import { parseProcessScenario } from "../../domain/process/processScenario.js";
+import { processScenarioSchema } from "../../domain/process/processScenario.js";
 
-const scenario = parseProcessScenario({
+const scenario = processScenarioSchema.parse({
   executable: "/usr/bin/node",
   working_directory: "/workspace",
   normalization: {

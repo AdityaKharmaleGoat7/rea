@@ -7,7 +7,7 @@ import {
   type SemanticCapturedSelection,
 } from "./javascriptSemanticProjectedSources.js";
 import * as t from "@babel/types";
-import { traverseJavaScriptAst } from "./javascriptSemanticTraversal.js";
+import { traverseJavaScriptValueAst } from "./javascriptSemanticTraversal.js";
 
 import { BUILTIN_RESOURCE_METHODS } from "./javascriptBuiltinResourceMethods.js";
 import { javaScriptRuntimeContext } from "./javascriptSourceParser.js";
@@ -39,7 +39,10 @@ import {
 import { createSemanticModuleInterop } from "./javascriptModuleInterop.js";
 import { createSemanticReturnedReferences } from "./javascriptSemanticReturnedReferences.js";
 import { semanticIterationSources } from "./javascriptSemanticIterationSources.js";
-import { semanticCommonJsRequireOwnEnumerableAt } from "./javascriptSemanticReferenceSources.js";
+import {
+  semanticCommonJsRequireOwnEnumerableAt,
+  semanticReferenceSourcesInactive,
+} from "./javascriptSemanticReferenceSources.js";
 import {
   semanticArrayPropertyReferences,
   semanticObjectPropertyReferences,
@@ -54,7 +57,6 @@ import {
   isUnmodifiedGlobalReference,
   isUnmodifiedImportMetaUrl,
 } from "./javascriptSemanticAmbientWrites.js";
-import { semanticReferenceSourcesInactive } from "./javascriptSemanticReferenceSources.js";
 
 export interface JavaScriptRequireOrigin {
   readonly origin: JavaScriptModuleOrigin;
@@ -1404,7 +1406,7 @@ const writesModuleRequire = (
     // Only a retained module identity can revoke the host delegate. Escaping
     // an unrelated local table is not evidence that it became the host module.
     isCommonJsModuleObject(node, state, false);
-  traverseJavaScriptAst(state.program, {
+  traverseJavaScriptValueAst(state.program, state.erasedSyntaxNodes, {
     enter: (node) => {
       const target = t.isAssignmentExpression(node)
         ? node.left

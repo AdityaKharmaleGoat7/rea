@@ -3,7 +3,7 @@ import * as t from "@babel/types";
 import { JavaScriptRouteScan } from "./javascriptRouteScan.js";
 import type { JavaScriptRouteSourceFacts } from "./javascriptRouteFacts.js";
 import { RETURNED_REFERENCE_WIDENING_LIMITATION } from "./javascriptSemanticCoverage.js";
-import { collectElectronWrappedCallPaths } from "./electronWrappedCallPaths.js";
+import { collectElectronWrappedCallPathsSteps } from "./electronWrappedCallPaths.js";
 import {
   ELECTRON_IDENTITY_LIMITATION,
   ELECTRON_MODULE,
@@ -14,10 +14,16 @@ import {
   traverseJavaScriptAstSteps,
 } from "./javascriptSemanticTraversal.js";
 
-import { isElectronRendererLoad } from "./electronStaticRenderer.js";
+import {
+  isElectronRendererLoad,
+  resolveElectronBrowserWindowReceiver,
+} from "./electronStaticRenderer.js";
 import { finishElectronNativeBindingsSteps } from "./electronStaticAnalysisNative.js";
 import { inspectElectronStaticNode } from "./electronStaticAnalysis.js";
-import { hasPossibleCommonJsDelegateWrite } from "./javascriptSemanticRequireOrigin.js";
+import {
+  hasPossibleCommonJsDelegateWrite,
+  semanticFactoryLoaderMemberAt,
+} from "./javascriptSemanticRequireOrigin.js";
 import { semanticResourceLimitReason } from "./javascriptSemanticResourceLimits.js";
 import { createStaticPathIntrinsicQuery } from "./javascriptStaticPathIntrinsics.js";
 import { createSemanticExpressionShapeResolver } from "./javascriptSemanticExpressionShapes.js";
@@ -41,6 +47,7 @@ import {
   indexVitePreloadDependencyTable,
 } from "./javascriptStaticAnalysisCalls.js";
 import {
+  finishBundlerExports,
   inspectBundlerRegistration,
   inspectBundlerBootstrap,
   inspectEsbuildWrapper,
@@ -69,6 +76,10 @@ import {
   isTypeOnlyImportDeclaration,
   semanticImportEqualsSpecifier,
 } from "./javascriptModuleDeclaration.js";
+import {
+  javaScriptStaticParseStatus,
+  type JavaScriptStaticCoverage,
+} from "./javascriptStaticCoverage.js";
 
 /** Parse one JavaScript artifact and recover static structure only. */
 export const analyzeJavaScriptStaticSource = (
@@ -105,11 +116,16 @@ export function* analyzeParsedJavaScriptStaticSourceSteps(
   );
   const findings: JavaScriptFindingContext = {
     pathIntrinsics: createStaticPathIntrinsicQuery(index),
+    browserWindowReceiver: (node, site, suffix) =>
+      resolveElectronBrowserWindowReceiver(node, site, suffix, findings, index),
     rendererLoad: (callee, site) =>
       isElectronRendererLoad(callee, site, findings, index),
     source,
     accumulator,
-    vitePreloadDependencyTable: indexVitePreloadDependencyTable(file.program),
+    vitePreloadDependencyTable: indexVitePreloadDependencyTable(
+      file.program,
+      bindings.erasedSyntaxNodes,
+    ),
     openReceiverFacts: receivers.openReceivers,
     electronBindings: electronIdentity.bindings,
     electronExportIntact: electronIdentity.intactExport,
@@ -125,6 +141,9 @@ export function* analyzeParsedJavaScriptStaticSourceSteps(
   );
   yield* traverseStaticSourceSteps(file, findings, bindings, routeScan);
   const routes = yield* routeScan.finishSteps();
+  if (accumulator.bundlerExportHelpersObserved)
+    yield* index.indexMemberMutationFactsSteps();
+  finishBundlerExports(accumulator, index);
   yield* finishElectronNativeBindingsSteps(findings, index);
   yield* finishElectronBrowserWindowsSteps(findings, index);
   if (accumulator.pendingModuleRequireCalls.length > 0) {
@@ -139,7 +158,7 @@ export function* analyzeParsedJavaScriptStaticSourceSteps(
     finishPartialNetworkEndpoints(findings, bindings, index);
     finishSqliteStorageCalls(findings, bindings, index);
   }
-  accumulator.electronCallPaths = collectElectronWrappedCallPaths(
+  accumulator.electronCallPaths = yield* collectElectronWrappedCallPathsSteps(
     file.program,
     bindings,
     source,
@@ -157,10 +176,13 @@ function* traverseStaticSourceSteps(
   routeScan: JavaScriptRouteScan,
 ): Generator<void, void> {
   yield* traverseJavaScriptAstSteps(file, {
+    // Code that never runs under the bundler convention yields no findings.
+    skip: (node) => findings.accumulator.unusedFactoryDefaults.has(node),
     enter: (node, parent) => {
       findings.accumulator.visitedNodes += 1;
       routeScan.inspect(node, parent);
-      inspectNode(node, findings, bindings);
+      if (!bindings.erasedSyntaxNodes.has(node))
+        inspectNode(node, findings, bindings);
       return undefined;
     },
   });
@@ -175,6 +197,43 @@ const finalizeStaticAnalysis = (
   routes: JavaScriptRouteSourceFacts,
 ): JavaScriptStaticAnalysis => {
   const parserErrors = file.errors.length;
+  const typeOnlySideEffect = hasUncertainTypeOnlyModuleSideEffect(file.program);
+  const electronObserved = accumulator.references.some(
+    ({ value }) =>
+      value.specifier !== null && ELECTRON_MODULE.test(value.specifier),
+  );
+  const resourceLimits = [...bindings.valueResourceLimits].sort();
+  const coverage: JavaScriptStaticCoverage = {
+    syntax:
+      parserErrors === 0
+        ? { status: "complete", error_count: 0 }
+        : { status: "recovered", error_count: parserErrors },
+    semantics: {
+      unknown_findings: accumulator.unknownFindings,
+      uncertainty: [
+        ...(accumulator.unknownFindings > 0
+          ? ["dynamic-findings" as const]
+          : []),
+        ...(bindings.returnedReferenceWidenings.size > 0
+          ? ["returned-reference-widening" as const]
+          : []),
+        ...(typeOnlySideEffect
+          ? ["type-only-module-side-effect" as const]
+          : []),
+      ],
+    },
+    examination: {
+      status:
+        resourceLimits.length > 0 ||
+        accumulator.electronCallPathLimitReached === true
+          ? "limited"
+          : "complete",
+      semantic_resource_limits: resourceLimits,
+      electron_call_paths_limited:
+        accumulator.electronCallPathLimitReached === true,
+    },
+    applicability: { electron: electronObserved ? "observed" : "unknown" },
+  };
   const limitations = [
     ...(bindings.valueResourceLimits.has("alias-selections")
       ? [semanticResourceLimitReason("alias-selections")]
@@ -202,26 +261,17 @@ const finalizeStaticAnalysis = (
       : [
           "One or more static keys, expressions, or Electron boundary values were dynamic and remain unknown.",
         ]),
-    ...(hasUncertainTypeOnlyModuleSideEffect(file.program)
+    ...(typeOnlySideEffect
       ? [
           "Compiler options are unavailable; inline type-only imports or re-exports may preserve a module side-effect dependency.",
         ]
       : []),
-    ...(accumulator.references.some(
-      ({ value }) =>
-        value.specifier !== null && ELECTRON_MODULE.test(value.specifier),
-    )
-      ? [ELECTRON_IDENTITY_LIMITATION]
-      : []),
+    ...(electronObserved ? [ELECTRON_IDENTITY_LIMITATION] : []),
     "JavaScript syntax was parsed as data and was never evaluated.",
   ];
   return {
-    parse_status:
-      parserErrors > 0 ||
-      accumulator.unknownFindings > 0 ||
-      bindings.valueResourceLimits.has("alias-selections")
-        ? "partial"
-        : "complete",
+    parse_status: javaScriptStaticParseStatus(coverage),
+    analysis_coverage: coverage,
     parse_error_count: parserErrors,
     visited_ast_nodes: accumulator.visitedNodes,
     references: finalizeLocatedFindings(
@@ -299,6 +349,15 @@ const inspectNode = (
     inspectBundlerBootstrap(source, node, accumulator, bindings);
     inspectBundlerRegistration(source, node, accumulator, bindings);
     inspectEsbuildWrapper(source, node, accumulator, bindings);
+    if (
+      semanticFactoryLoaderMemberAt(
+        node,
+        bindings,
+        accumulator.factoryRequireBindingIds,
+        "d",
+      ) === "factory-loader"
+    )
+      accumulator.bundlerExportHelpersObserved = true;
     inspectCall(source, node, findings, bindings);
   } else if (t.isOptionalCallExpression(node)) {
     inspectCall(source, node, findings, bindings);

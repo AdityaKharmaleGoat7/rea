@@ -401,13 +401,16 @@ it("preserves duplicate headers and binary bytes, redacting credentials and decl
   );
   if (content?.kind !== "network-content" || content.body.state !== "captured")
     throw new Error("Missing response");
-  expect(Buffer.from(content.body.content, "base64")).toEqual(
-    Buffer.concat([
-      Buffer.from([0xff, 0x00]),
-      Buffer.from("[REDACTED:declared]"),
-      Buffer.from([0xfe]),
-    ]),
-  );
+  expect(
+    Buffer.compare(
+      Buffer.from(content.body.content, "base64"),
+      Buffer.concat([
+        Buffer.from([0xff, 0x00]),
+        Buffer.from("[REDACTED:declared]"),
+        Buffer.from([0xfe]),
+      ]),
+    ),
+  ).toBe(0);
   expect(content.body.redacted).toBe(true);
   expect(content.headers).toEqual({
     state: "captured",
@@ -943,4 +946,51 @@ it("does not read content when phase metadata was omitted", async () => {
     "max-total-event-allocation-bytes",
   );
   expect(collector.limitations().join(" ")).toContain("incomplete");
+});
+
+it("stamps when each request was observed, and the browser's own start and duration once it ends", async () => {
+  vi.useFakeTimers({ now: Date.parse("2026-10-24T05:00:00.250Z") });
+  const { collector, events } = harness({
+    request_body: false,
+    response_body: false,
+    header_values: false,
+  });
+  class TimedRequest extends RequestFixture {
+    constructor(
+      marker: string,
+      readonly startTime: number,
+      readonly responseEnd: number,
+    ) {
+      super(marker);
+    }
+    timing() {
+      return { startTime: this.startTime, responseEnd: this.responseEnd };
+    }
+  }
+  const finished = new TimedRequest(
+    "timed",
+    Date.parse("2026-10-24T05:00:00.200Z"),
+    12.5,
+  );
+  const failed = new TimedRequest("untimed", 0, -1);
+  collector.request(finished);
+  collector.request(failed);
+  collector.finished(finished);
+  collector.failed(failed);
+  await collector.finish();
+  expect(events.filter(({ kind }) => kind === "request")).toEqual([
+    expect.objectContaining({ observed_at: "2026-10-24T05:00:00.250Z" }),
+    expect.objectContaining({ observed_at: "2026-10-24T05:00:00.250Z" }),
+  ]);
+  expect(events).toContainEqual(
+    expect.objectContaining({
+      kind: "request-finished",
+      started_at: "2026-10-24T05:00:00.200Z",
+      elapsed_ms: 12.5,
+    }),
+  );
+  const failure = events.find(({ kind }) => kind === "request-failed");
+  expect(failure).toBeDefined();
+  expect(failure).not.toHaveProperty("started_at");
+  expect(failure).not.toHaveProperty("elapsed_ms");
 });

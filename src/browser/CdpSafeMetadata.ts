@@ -23,6 +23,9 @@ export const safeResponseMetadata = (
   readonly agentHints: AgentHint[];
 } => {
   const headers = normalizedHeaders(response.headers);
+  // RFC 9110 section 5.3: repeated field lines combine as one comma-separated value.
+  const field = (name: string): string | undefined =>
+    headers.get(name)?.join(", ");
   const responseUrl = cdpStringValue(response.url) ?? url;
   const parsedLinks = parseLinks(
     headers.get("link"),
@@ -50,21 +53,19 @@ export const safeResponseMetadata = (
     response: {
       request_id: requestId,
       url,
-      mime_type: boundedHeader(cdpStringValue(response.mimeType)),
-      content_length: contentLength(headers.get("content-length")),
-      content_encoding: boundedHeader(headers.get("content-encoding")),
+      mime_type: mediaTypeDeclaration(cdpStringValue(response.mimeType)),
+      content_length: contentLength(field("content-length")),
+      content_encoding: boundedHeader(field("content-encoding")),
       csp,
       links,
       policies: {
-        coop: structuredFieldToken(headers.get("cross-origin-opener-policy")),
-        coep: structuredFieldToken(headers.get("cross-origin-embedder-policy")),
-        corp: policyToken(headers.get("cross-origin-resource-policy")),
-        referrer_policy: referrerPolicy(headers.get("referrer-policy")),
-        x_content_type_options: policyToken(
-          headers.get("x-content-type-options"),
-        ),
+        coop: structuredFieldToken(field("cross-origin-opener-policy")),
+        coep: structuredFieldToken(field("cross-origin-embedder-policy")),
+        corp: policyToken(field("cross-origin-resource-policy")),
+        referrer_policy: referrerPolicy(field("referrer-policy")),
+        x_content_type_options: policyToken(field("x-content-type-options")),
         permissions_policy_features: permissionFeatures(
-          headers.get("permissions-policy"),
+          field("permissions-policy"),
         ),
       },
     },
@@ -72,10 +73,16 @@ export const safeResponseMetadata = (
   };
 };
 
-const normalizedHeaders = (value: unknown): ReadonlyMap<string, string> => {
+/**
+ * Lowercase header names and keep each field line. CDP joins repeated field
+ * lines with LF, so each line is parsed on its own.
+ */
+const normalizedHeaders = (
+  value: unknown,
+): ReadonlyMap<string, readonly string[]> => {
   if (typeof value !== "object" || value === null || Array.isArray(value))
     return new Map();
-  const headers = new Map<string, string>();
+  const headers = new Map<string, string[]>();
   for (const [name, raw] of Object.entries(value)) {
     const normalized = name.toLowerCase();
     const header =
@@ -84,20 +91,30 @@ const normalizedHeaders = (value: unknown): ReadonlyMap<string, string> => {
         : typeof raw === "number" && Number.isFinite(raw)
           ? String(raw)
           : undefined;
-    if (header !== undefined) headers.set(normalized, header);
+    if (header !== undefined)
+      headers.set(normalized, [
+        ...(headers.get(normalized) ?? []),
+        ...header.split(/\r?\n/u),
+      ]);
   }
   return headers;
 };
 
+/**
+ * Each field line is a CSP3 serialized policy list, with policies separated by
+ * commas. Directives of every policy are returned in order; the schema does not
+ * record which policy a directive came from.
+ */
 const parseCsp = (
-  value: string | undefined,
+  lines: readonly string[] | undefined,
   baseUrl: string,
   allowedOrigins: ReadonlySet<string>,
 ): ResponseMetadata["csp"] => {
   const directives: ResponseMetadata["csp"]["directives"] = [];
   let nonceCount = 0;
   let hashCount = 0;
-  for (const rawDirective of (value ?? "").split(";")) {
+  const policies = (lines ?? []).flatMap((line) => line.split(","));
+  for (const rawDirective of policies.flatMap((policy) => policy.split(";"))) {
     const [rawName, ...tokens] = rawDirective.trim().split(/\s+/u);
     const name = (rawName ?? "").toLowerCase();
     if (!/^[a-z][a-z0-9\x2d]*$/u.test(name)) continue;
@@ -192,15 +209,15 @@ const schemeOf = (baseUrl: string): string | undefined => {
 };
 
 const parseLinks = (
-  value: string | undefined,
+  lines: readonly string[] | undefined,
   responseUrl: string,
   allowedOrigins: ReadonlySet<string>,
 ): ParsedLink[] => {
   const links: ParsedLink[] = [];
   // Compare resolved identities before safeDestination removes userinfo.
   const responseIdentity = resolvedUrl(responseUrl, responseUrl);
-  // CDP joins repeated field lines with LF; quoted delimiters belong to one line.
-  for (const line of (value ?? "").split(/\r?\n/u)) {
+  // Quoted delimiters belong to one field line.
+  for (const line of lines ?? []) {
     for (const entry of splitLinkHeader(line)) {
       const match = /^\s*<([^>]*)>(.*)$/u.exec(entry);
       if (match === null) continue;
@@ -228,7 +245,9 @@ const parseLinks = (
           context_scope: context.scope,
           rel: rel.toLowerCase().split(/\s+/u).filter(Boolean),
           as: boundedHeader(lastLinkParameter(parameters, "as")?.value),
-          type: boundedHeader(firstLinkParameter(parameters, "type")?.value),
+          type: mediaTypeDeclaration(
+            firstLinkParameter(parameters, "type")?.value,
+          ),
           crossorigin: boundedHeader(
             lastLinkParameter(parameters, "crossorigin")?.value,
           ),
@@ -412,6 +431,17 @@ const contentLength = (value: string | undefined): number | null => {
 
 const boundedHeader = (value: string | undefined): string | null =>
   value === undefined ? null : value.trim().toLowerCase();
+
+// RFC 9110 section 8.3.1: type/subtype are case-insensitive; parameters may not be.
+const mediaTypeDeclaration = (value: string | undefined): string | null => {
+  if (value === undefined) return null;
+  const declaration = value.trim();
+  const separator = declaration.indexOf(";");
+  return separator < 0
+    ? declaration.toLowerCase()
+    : declaration.slice(0, separator).toLowerCase() +
+        declaration.slice(separator);
+};
 
 const decodeLinkParameter = (value: string): string => {
   if (!value.startsWith('"')) return value;

@@ -53,6 +53,8 @@ const sessionEvidence = effects({ mutatesSession: true });
 
 /** Explicit effect audit for every public tool. */
 export const TOOL_EFFECTS: Readonly<Record<string, ToolEffects>> = {
+  inspect_analysis_settings: effects(),
+  update_analysis_settings: effects({ mutatesSession: true }),
   list_cutter_sessions: effects({ accessesNetwork: true }),
   cutter_command: effects({
     mutatesTarget: true,
@@ -261,6 +263,10 @@ export const TOOL_EFFECTS: Readonly<Record<string, ToolEffects>> = {
   inspect_pe_imports: evidence,
   inspect_native_exports: evidence,
   inspect_elf_notes: evidence,
+  inspect_apple_ips: evidence,
+  inspect_devicetree: evidence,
+  inspect_kernel_module: evidence,
+  inspect_pe_load_config: evidence,
   inspect_analysis_view: evidence,
   inspect_firmware_regions: effects({
     mutatesSession: true,
@@ -680,6 +686,10 @@ export const TOOL_EFFECTS: Readonly<Record<string, ToolEffects>> = {
     writesFilesystem: true,
     idempotent: false,
   }),
+  export_environment_bundle: effects({
+    writesFilesystem: true,
+    idempotent: false,
+  }),
   reconcile_javascript_runtime: evidence,
   recover_javascript_sources: effects({
     mutatesSession: true,
@@ -775,6 +785,8 @@ export const annotationsFromEffects = (
  * client probes (version output and stderr excerpts) can.
  */
 export const TARGET_CONTENT_FREE_TOOLS: ReadonlySet<string> = new Set([
+  "inspect_analysis_settings",
+  "update_analysis_settings",
   "export_evidence_bundle",
   "record_unknown",
 ]);

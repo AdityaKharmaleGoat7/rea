@@ -1,7 +1,7 @@
 <div align="center">
 
 [English](../../README.md) · [简体中文](README_zh.md) · [繁體中文](README_zh-TW.md) · [日本語](README_ja.md) · [한국어](README_ko.md) · **Türkçe** · [Русский](README_ru.md) · [Tiếng Việt](README_vi.md) · [ไทย](README_th.md) · [Deutsch](README_de.md) · [Español](README_es.md) · [Français](README_fr.md) · [Українська](README_uk.md) · [Polski](README_pl.md) · [Português (Brasil)](README_pt-BR.md) · [العربية](README_ar.md) · [فارسی](README_fa.md) · [Bahasa Indonesia](README_id.md) · [Italiano](README_it.md)
-· [Ελληνικά](README_el.md) · [മലയാളം](README_ml.md) · [Roman Urdu](README_ur-Latn.md)
+· [Ελληνικά](README_el.md) · [മലയാളം](README_ml.md) · [Roman Urdu](README_ur-Latn.md) · [Română](README_ro.md)
 
 # REA: Her şeyi tersine mühendislikle inceleyin
 
@@ -20,7 +20,7 @@
 
 **[Web sitesi](https://rea.tools/tr/) · [Rehberler](https://rea.tools/tr/guides/) · [Örnek çalışmalar](https://rea.tools/tr/showcase/)**
 
-[Hızlı başlangıç](#hızlı-başlangıç) · [REA nasıl çalışır](#rea-nasıl-çalışır) · [Neleri analiz edebilirsiniz](#neleri-analiz-edebilirsiniz) · [Örnek çalışmalar](#örnek-çalışmalar) · [Sık sorulan sorular](#sık-sorulan-sorular) · [GNU objdump ve Rizin araçları](../reverse-engineering-tools.md) · [Belgeler](#belgeler)
+[Hızlı başlangıç](#hızlı-başlangıç) · [REA nasıl çalışır](#rea-nasıl-çalışır) · [Neleri analiz edebilirsiniz](#neleri-analiz-edebilirsiniz) · [Örnek çalışmalar](#örnek-çalışmalar) · [RL ortamları oluşturun](#build-rl-environments) · [Sık sorulan sorular](#sık-sorulan-sorular) · [GNU objdump ve Rizin araçları](../reverse-engineering-tools.md) · [Belgeler](#belgeler)
 
 <code>npx rea-agents setup</code>
 
@@ -156,6 +156,8 @@ REA; Node.js 22.x (>=22.23.4), 24.x (>=24.22.1) veya 26+ (>=26.12.1) ve npm gere
 | PE certificates                         | Authenticode WIN_CERTIFICATE entries and PKCS#7 signer/X.509 identity fields                                | Built-in static PE inspection; [PE certificates](../pe-certificates.md)                                                            |
 | PE imports                              | Import and delay-load DLL names, ordinals, IAT RVAs and pefile import hash                                  | Built-in static PE inspection; [PE imports](../pe-imports.md)                                                                      |
 | ELF notes                               | PT_NOTE/SHT_NOTE owners, types, GNU build-id and ABI-tag fields                                             | Built-in static ELF inspection; [ELF notes](../elf-notes.md)                                                                       |
+| Apple IPS crashes                       | .ips metadata, threads, images, registers and crash classes                                                 | Built-in static JSON inspection; [Apple IPS](../apple-ips.md)                                                                      |
+| Linux kernel modules                    | .modinfo keys, __versions CRCs, this_module presence, and signature trailer                                 | Built-in static ELF inspection; [kernel modules](../kernel-modules.md)                                                             |
 | Erlang BEAM                             | IFF chunks, atoms, exports, and tables                                                                      | Built-in static BEAM inspection; [Erlang BEAM](../erlang-beam.md)                                                                  |
 | WASM artefaktı                          | Doğrulama, bölümler, tam import/export WAT biçimleri ve decode edilmiş WAT                                  | Çağıranın sağladığı WABT 1.0.42; `inspect_wasm_artifact`                                                                           |
 | EVM bayt kodu                           | Yönlendirme seçicileri, bayt ofsetleri, çıkarımla belirlenen argümanlar ve durum değiştirilebilirliği       | Linux x64 üzerinde yerel ham bayt/onaltılık girdi; [çevrimdışı EVM rehberi](../evm-bytecode.md)                                    |
@@ -217,7 +219,50 @@ Bir ses çağrısından konumu stereo konumlandırmaya dönüştüren yardımcı
 
 [Örnek çalışmayı okuyun](https://rea.tools/tr/showcase/th04/) · [Yeniden oluşturma deposu](https://github.com/N0zoM1z0/th04)
 
+### REA ile RL ortamları oluşturun
+
+Bir web uygulaması oturumunu kaydedin, API’sini araçlara dönüştürün ve bir yapay zekâ ajanının kullanabileceği ortamı dışa aktarın. AgentEnv ile çalıştırın, ardından RL eğitimi veya değerlendirmesi için görevler ve ödül kontrolleri ekleyin.
+
+[Ortam oluşturma rehberi](https://rea.tools/guides/rl-environments/) ·
+[Demoyu X’te izleyin](https://x.com/reatools/status/2112574822584918075?s=20)
+
 REA'yı ilginç bir konuda kullandıysanız görmek isteriz. Hedefi, sorunuzu, REA'nın nasıl yardımcı olduğunu ve bulgularınızı bir [issue](https://github.com/morluto/rea/issues) veya [pull request](https://github.com/morluto/rea/pulls) ile paylaşın.
+
+<a id="build-rl-environments"></a>
+
+## RL ortamları oluşturun
+
+Asıl uygulamayı çalıştırmadan, yapay zekâ ajanının sorun bulma veya klasör oluşturma gibi görevleri deneyeceği yerel bir ortam oluşturun. Bunu pekiştirmeli öğrenme (RL) veya ajanın görevleri ne kadar iyi tamamladığını test etmek için kullanın.
+
+REA, kaydedilmiş API isteklerini ve yanıtlarını ajanın çağırabileceği araçlara dönüştürür. Ortam kayıtlı verileri kullanır ve yalnızca etkisi kayıtla doğrulanan değişiklikleri destekler.
+
+Ajanınızda REA’yı kurduktan sonra aşağıdaki örnek URL’yi ve klasör görevlerini kendinize göre değiştirin:
+
+```text
+REA ile şu test web uygulamamdan bir RL ortamı oluştur:
+http://127.0.0.1:3000
+Klasör listeleme, oluşturma, yeniden adlandırma ve silme işlemlerini kapsa.
+Test klasörleri oluşturup silebilirsin. Mevcut verileri değiştirme.
+my-env adlı klasöre kaydet, hangi işlemlerin çalıştığını kontrol et ve nasıl çalıştıracağımı anlat.
+```
+
+<details>
+<summary>Komut satırını kullanın</summary>
+
+Uygulamanın tarayıcı isteklerini ve yanıtlarını kaydettiğiniz bir dosya varsa bu komutları kullanabilirsiniz. Oluşan ortamı çalıştırmak için AgentEnv ve Docker da gerekir.
+
+```sh
+rea environment-build ./session.har ./my-env --name my-env --json
+agent-env run ./my-env
+```
+
+</details>
+
+REA, çalıştırılabilir bir ortamı ve başlayıp yanıt verdiğini kontrol eden temel bir testi dışa aktarır. Görev hedeflerini ve ödül kontrollerini tanımlamak, ardından eğitim çalıştırmak için RL çerçevenizle kullanın.
+
+[Ortam oluşturma rehberi](https://rea.tools/guides/rl-environments/) ·
+[Ortam referansı](../agent-environments.md) ·
+[Demoyu X’te izleyin](https://x.com/reatools/status/2112574822584918075?s=20)
 
 ## Sık sorulan sorular
 

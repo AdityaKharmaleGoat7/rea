@@ -1,7 +1,7 @@
 <div align="center">
 
 [English](../../README.md) · [简体中文](README_zh.md) · [繁體中文](README_zh-TW.md) · [日本語](README_ja.md) · [한국어](README_ko.md) · [Türkçe](README_tr.md) · **Русский** · [Tiếng Việt](README_vi.md) · [ไทย](README_th.md) · [Deutsch](README_de.md) · [Español](README_es.md) · [Français](README_fr.md) · [Українська](README_uk.md) · [Polski](README_pl.md) · [Português (Brasil)](README_pt-BR.md) · [العربية](README_ar.md) · [فارسی](README_fa.md) · [Bahasa Indonesia](README_id.md) · [Italiano](README_it.md)
-· [Ελληνικά](README_el.md) · [മലയാളം](README_ml.md) · [Roman Urdu](README_ur-Latn.md)
+· [Ελληνικά](README_el.md) · [മലയാളം](README_ml.md) · [Roman Urdu](README_ur-Latn.md) · [Română](README_ro.md)
 
 # REA: Реверс-инжиниринг чего угодно
 
@@ -20,7 +20,7 @@
 
 **[Сайт](https://rea.tools/ru/) · [Руководства](https://rea.tools/ru/guides/) · [Примеры](https://rea.tools/ru/showcase/)**
 
-[Быстрый старт](#быстрый-старт) · [Как работает REA](#как-работает-rea) · [Что можно анализировать](#что-можно-анализировать) · [Примеры](#примеры) · [Частые вопросы](#частые-вопросы) · [Инструменты GNU objdump и Rizin](../reverse-engineering-tools.md) · [Документация](#документация)
+[Быстрый старт](#быстрый-старт) · [Как работает REA](#как-работает-rea) · [Что можно анализировать](#что-можно-анализировать) · [Примеры](#примеры) · [Создание RL-окружений](#build-rl-environments) · [Частые вопросы](#частые-вопросы) · [Инструменты GNU objdump и Rizin](../reverse-engineering-tools.md) · [Документация](#документация)
 
 <code>npx rea-agents setup</code>
 
@@ -158,7 +158,9 @@ REA требует Node.js 22.x (>=22.23.4), 24.x (>=24.22.1) или 26+ (>=26.1
 | PE certificates                     | Authenticode WIN_CERTIFICATE entries and PKCS#7 signer/X.509 identity fields                                               | Built-in static PE inspection; [PE certificates](../pe-certificates.md)                                                                                    |
 | PE imports                          | Import and delay-load DLL names, ordinals, IAT RVAs and pefile import hash                                                 | Built-in static PE inspection; [PE imports](../pe-imports.md)                                                                                              |
 | ELF notes                           | PT_NOTE/SHT_NOTE owners, types, GNU build-id and ABI-tag fields                                                            | Built-in static ELF inspection; [ELF notes](../elf-notes.md)                                                                                               |
+| Linux kernel modules                | .modinfo keys, __versions CRCs, this_module presence, and signature trailer                                                | Built-in static ELF inspection; [kernel modules](../kernel-modules.md)                                                                                     |
 | Erlang BEAM                         | IFF chunks, atoms, exports, and tables                                                                                     | Built-in static BEAM inspection; [Erlang BEAM](../erlang-beam.md)                                                                                          |
+| Apple IPS crashes                   | .ips metadata, threads, images, registers and crash classes                                                                | Built-in static JSON inspection; [Apple IPS](../apple-ips.md)                                                                                              |
 | Записанные сбои Linux               | Необработанные записи note, регистры/сигналы каждого записанного потока и необязательные кандидаты сопоставления с памятью | pwntools, предоставленный вызывающей стороной, в Linux x64; необязательные GDB/pwndbg; [записанные сбои](../recorded-crashes.md)                           |
 | Установленные настольные приложения | Возможные среды выполнения, файлы с доказательствами, компоненты и дальнейшие шаги                                         | Ограниченная проверка каталогов и заголовков；[Настольные приложения](../desktop-applications.md)                                                          |
 | JavaScript / Electron               | Модули, импорты, карты исходного кода, маршруты, IPC и связи с нативными дополнениями                                      | Node.js и npm; [анализ приложений](../javascript-application-workflows.md); Linux: procps `ps`                                                             |
@@ -221,7 +223,50 @@ REA требует Node.js 22.x (>=22.23.4), 24.x (>=24.22.1) или 26+ (>=26.1
 
 [Прочитать исследование](https://rea.tools/ru/showcase/th04/) · [Репозиторий реконструкции](https://github.com/N0zoM1z0/th04)
 
+### Создавайте RL-окружения с REA
+
+Запишите сеанс веб-приложения, превратите его API в инструменты и экспортируйте окружение для ИИ-агента. Запустите его с AgentEnv, затем добавьте задания и проверки наград для RL-обучения или оценки.
+
+[Руководство по созданию окружения](https://rea.tools/guides/rl-environments/) ·
+[Смотреть демо в X](https://x.com/reatools/status/2112574822584918075?s=20)
+
 Если вы исследовали с REA что-то интересное, поделитесь результатом. Создайте [issue](https://github.com/morluto/rea/issues) или [pull request](https://github.com/morluto/rea/pulls) и укажите цель, ваш вопрос, как помог REA и что удалось узнать.
+
+<a id="build-rl-environments"></a>
+
+## Создание RL-окружений
+
+Создайте локальное окружение, где ИИ-агент сможет выполнять пробные задания, например искать задачу в трекере или создавать папку, без запуска исходного приложения. Используйте его для обучения с подкреплением (RL) или проверки того, как агент справляется с заданиями.
+
+REA превращает записанные API-запросы и ответы в инструменты, которые может вызывать агент. Окружение использует записанные данные и поддерживает изменения только тогда, когда запись подтверждает их эффект.
+
+Настройте REA в своём агенте, затем замените пример URL и операции с папками на свои:
+
+```text
+С помощью REA создай RL-окружение из моего тестового веб-приложения:
+http://127.0.0.1:3000
+Включи просмотр списка папок, создание, переименование и удаление.
+Можно создавать и удалять тестовые папки. Существующие данные не меняй.
+Сохрани в папку my-env, проверь доступные операции и расскажи, как запустить окружение.
+```
+
+<details>
+<summary>Использовать командную строку</summary>
+
+Эти команды подходят, если у вас уже есть файл с записанными запросами и ответами приложения в браузере. Для запуска результата также нужны AgentEnv и Docker.
+
+```sh
+rea environment-build ./session.har ./my-env --name my-env --json
+agent-env run ./my-env
+```
+
+</details>
+
+REA экспортирует готовое к запуску окружение с базовым тестом запуска и ответов. Подключите его к своему RL-фреймворку, чтобы задать цели, добавить проверки наград и запустить обучение.
+
+[Руководство по созданию окружения](https://rea.tools/guides/rl-environments/) ·
+[Справочник окружений](../agent-environments.md) ·
+[Смотреть демо в X](https://x.com/reatools/status/2112574822584918075?s=20)
 
 ## Частые вопросы
 

@@ -1,23 +1,37 @@
+import {
+  nativeAddressListSchema,
+  nativeObservationSourceSchemas,
+} from "../domain/native/nativeObservation.js";
+import { nativeObservationSummaryViewResultSchemas } from "../domain/analysisView/analysisView.js";
 import { literalFeatureMatchSchema } from "../domain/native/literalFeatureMatch.js";
 import { byteEntropySchema } from "../domain/native/byteEntropy.js";
-import { byteEntropySummaryViewResultSchema } from "../domain/analysisView/analysisView.js";
-import { nativeFunctionMatchingSchema } from "../domain/native/functionMatching.js";
-import { nativeFunctionMatchingSummaryViewResultSchema } from "../domain/analysisView/analysisView.js";
-import { nativeByteReadSchema } from "../domain/native/nativeByteRead.js";
-import { analysisDetailOutputSchemaOf } from "./analysisDetail.js";
-import { nativeFunctionSummaryViewResultSchema } from "../domain/analysisView/analysisView.js";
-import { functionDossierSchema } from "../domain/hopperValues.js";
-import { nativeInventorySummaryViewResultSchema } from "../domain/analysisView/analysisView.js";
-import { nativeInventoryRowsSchemas } from "../domain/native/nativeInventory.js";
-import { z } from "zod";
-import { byteSearchResultSchema } from "../domain/native/bytePattern.js";
 import {
+  byteEntropySummaryViewResultSchema,
+  nativeFunctionMatchingSummaryViewResultSchema,
+  nativeFunctionSummaryViewResultSchema,
+  nativeInventorySummaryViewResultSchema,
+  nativeLoadImageSummaryViewResultSchema,
   artifactInventorySummaryViewResultSchema,
   interfaceBuilderSummaryViewResultSchema,
   machoSummaryViewResultSchema,
   managedArtifactSummaryViewResultSchema,
   managedMemberSummaryViewResultSchema,
 } from "../domain/analysisView/analysisView.js";
+import { nativeFunctionMatchingSchema } from "../domain/native/functionMatching.js";
+import { nativeByteReadSchema } from "../domain/native/nativeByteRead.js";
+import { analysisDetailOutputSchemaOf } from "./analysisDetail.js";
+import {
+  functionDossierSchema,
+  analysisBookmarkSchema,
+  functionInstructionWindowSchema,
+  referenceEdgeSchema,
+  unresolvedCallSchema,
+  procedureIdentitySchema,
+  containingProcedureResolutionSchema,
+} from "../domain/hopperValues.js";
+import { nativeInventoryRowsSchemas } from "../domain/native/nativeInventory.js";
+import { z } from "zod";
+import { byteSearchResultSchema } from "../domain/native/bytePattern.js";
 import { evidenceBundleSummarySchema } from "../domain/evidenceRecordSummary.js";
 import {
   BINARY_ARCHITECTURES,
@@ -43,14 +57,6 @@ import { residualUnknownSchema } from "../domain/residualUnknown.js";
 import { evidenceBundleSchema } from "../domain/evidenceBundle.js";
 
 import { processCaptureComparisonSchema } from "../domain/process/processComparison.js";
-import {
-  analysisBookmarkSchema,
-  functionInstructionWindowSchema,
-  referenceEdgeSchema,
-  unresolvedCallSchema,
-  procedureIdentitySchema,
-  containingProcedureResolutionSchema,
-} from "../domain/hopperValues.js";
 import { nativeApiInspectionResultSchema } from "../domain/native/nativeApiBoundary.js";
 import {
   demangleSwiftSchema,
@@ -87,17 +93,16 @@ import { relationshipCoverageSchema } from "../domain/relationshipCoverage.js";
 import { nativeDispatchMetadataResultSchema } from "../domain/native/objcSwiftMetadata.js";
 import { nativeInvestigationTraceSchema } from "../domain/native/nativeInvestigationGraph.js";
 import {
-  addressList,
   addressedEntry,
   functionDossierOutput,
-  graphNode,
   lifecycleResultOf,
   nullableText,
   procedureInfoOutput,
   objcClassDiscoveryOutput,
   evidenceResultOf,
   segmentOutput,
-  sessionProvider,
+  sessionProviderFacts,
+  sessionStatusDetailShapes,
   symbolDiscoveryOutput,
   targetFormatSchema,
   targetKindSchema,
@@ -129,7 +134,10 @@ const bookmarkFacetSchema = z.discriminatedUnion("state", [
 export const officialOutputSchemas: Readonly<Record<string, z.ZodObject>> = {
   search_bytes: evidenceResultOf(byteSearchResultSchema),
   annotate_native_function: evidenceResultOf(nativeFunctionAnnotationsSchema),
-  inspect_native_load_image: evidenceResultOf(nativeLoadImageSchema),
+  inspect_native_load_image: analysisDetailOutputSchemaOf(
+    nativeLoadImageSchema,
+    nativeLoadImageSummaryViewResultSchema,
+  ),
   inspect_native_data_type: evidenceResultOf(nativeDataTypeSchema),
   inspect_native_instruction: evidenceResultOf(nativeInstructionSchema),
   resolve_native_call_targets: evidenceResultOf(nativeCallTargetsSchema),
@@ -163,10 +171,19 @@ export const officialOutputSchemas: Readonly<Record<string, z.ZodObject>> = {
   ),
   next_address: evidenceResultOf(z.string()),
   prev_address: evidenceResultOf(z.string()),
-  procedure_address: evidenceResultOf(z.string()),
+  procedure_address: analysisDetailOutputSchemaOf(
+    nativeObservationSourceSchemas.procedure_address,
+    nativeObservationSummaryViewResultSchemas.procedure_address,
+  ),
   procedure_assembly: evidenceResultOf(z.string()),
-  procedure_callees: evidenceResultOf(addressList),
-  procedure_callers: evidenceResultOf(addressList),
+  procedure_callees: analysisDetailOutputSchemaOf(
+    nativeObservationSourceSchemas.procedure_callees,
+    nativeObservationSummaryViewResultSchemas.procedure_callees,
+  ),
+  procedure_callers: analysisDetailOutputSchemaOf(
+    nativeObservationSourceSchemas.procedure_callers,
+    nativeObservationSummaryViewResultSchemas.procedure_callers,
+  ),
   procedure_info: procedureInfoOutput,
   read_function_instructions: evidenceResultOf(functionInstructionWindowSchema),
   read_bytes: evidenceResultOf(nativeByteReadSchema),
@@ -208,11 +225,12 @@ export const officialOutputSchemas: Readonly<Record<string, z.ZodObject>> = {
     }),
   ),
   procedure_pseudo_code: evidenceResultOf(nullableText),
-  resolve_containing_procedure: evidenceResultOf(
-    containingProcedureResolutionSchema,
+  resolve_containing_procedure: analysisDetailOutputSchemaOf(
+    nativeObservationSourceSchemas.resolve_containing_procedure,
+    nativeObservationSummaryViewResultSchemas.resolve_containing_procedure,
   ),
   search_procedures: analysisDetailOutputSchemaOf(
-    z.array(z.object({ address: z.string(), value: z.string() })),
+    nativeInventoryRowsSchemas.names,
     nativeInventorySummaryViewResultSchema.extend({
       parent_operation: z.literal("search_procedures"),
     }),
@@ -230,7 +248,7 @@ export const officialOutputSchemas: Readonly<Record<string, z.ZodObject>> = {
   set_comment: evidenceResultOf(z.boolean()),
   set_inline_comment: evidenceResultOf(z.boolean()),
   unset_bookmark: evidenceResultOf(z.boolean()),
-  xrefs: evidenceResultOf(addressList),
+  xrefs: evidenceResultOf(nativeAddressListSchema),
 };
 
 const literalTraceOutput = evidenceResultOf(
@@ -340,11 +358,9 @@ export const enhancedOutputSchemas: Readonly<Record<string, z.ZodObject>> = {
       failed: z.int().min(0),
     }),
   ),
-  get_call_graph: evidenceResultOf(
-    z.strictObject({
-      graph: z.record(z.string(), z.array(graphNode)),
-      limitations: z.array(z.string()),
-    }),
+  get_call_graph: analysisDetailOutputSchemaOf(
+    nativeObservationSourceSchemas.get_call_graph,
+    nativeObservationSummaryViewResultSchemas.get_call_graph,
   ),
   analyze_swift_types: evidenceResultOf(
     z.object({
@@ -376,7 +392,7 @@ export const enhancedOutputSchemas: Readonly<Record<string, z.ZodObject>> = {
         status: z.literal("resolved"),
         name: z.string(),
         address: z.string(),
-        xrefs: addressList,
+        xrefs: nativeAddressListSchema,
       }),
       z.object({
         status: z.literal("unresolved"),
@@ -500,7 +516,7 @@ const lifecycleTargetFields = {
 };
 const detectedLifecycleTargetSchema = z.object({
   ...lifecycleTargetFields,
-  format: targetFormatSchema.exclude(["raw-binary"]),
+  format: targetFormatSchema.exclude(["raw-binary", "gamecube-dol"]),
   architecture: z
     .enum(BINARY_ARCHITECTURES)
     .exclude([...RAW_ONLY_ARCHITECTURES])
@@ -515,14 +531,30 @@ const rawLifecycleTargetSchema = z.object({
     "Canonical caller-selected address where raw file offset 0 is mapped and execution is seeded.",
   ),
 });
+const dolLifecycleTargetSchema = z.object({
+  ...lifecycleTargetFields,
+  format: z.literal("gamecube-dol"),
+  kind: z.literal("executable"),
+  architecture: z.literal("powerpc"),
+  entry_point: rawBinaryEntryPointSchema.describe(
+    "Canonical entry address taken from the caller-selected DOL header.",
+  ),
+});
+
+/**
+ * Every open-target variant. open_binary and binary_session share this list so
+ * a target that open_binary returns is always valid in binary_session status.
+ */
+const openLifecycleTargetVariants = [
+  detectedLifecycleTargetSchema,
+  rawLifecycleTargetSchema,
+  dolLifecycleTargetSchema,
+] as const;
 
 /** Exact structured-content schemas for target lifecycle operations. */
 export const sessionOutputSchemas = {
   open_binary: lifecycleResultOf(
-    z.discriminatedUnion("format", [
-      detectedLifecycleTargetSchema,
-      rawLifecycleTargetSchema,
-    ]),
+    z.discriminatedUnion("format", [...openLifecycleTargetVariants]),
   ),
   open_bundle_resources: lifecycleResultOf(bundleResourceRootSchema),
   close_binary: lifecycleResultOf(
@@ -548,23 +580,27 @@ export const sessionOutputSchemas = {
       }),
     ]),
   ),
+  // Every session kind crossed with every detail level, so `detail` fixes
+  // which candidate, tool-group and omission fields the result carries.
   binary_session: lifecycleResultOf(
-    z.union([
-      sessionProvider.extend({ open: z.literal(false) }),
-      sessionProvider.extend({
-        open: z.literal(true),
-        session_kind: z.literal("bundle_resources"),
-        resource_root: bundleResourceRootSchema,
-      }),
-      sessionProvider.extend({
-        open: z.literal(true),
-        ...detectedLifecycleTargetSchema.shape,
-      }),
-      sessionProvider.extend({
-        open: z.literal(true),
-        ...rawLifecycleTargetSchema.shape,
-      }),
-    ]),
+    z.union(
+      sessionStatusDetailShapes.flatMap((detail) => [
+        sessionProviderFacts.extend({ open: z.literal(false), ...detail }),
+        sessionProviderFacts.extend({
+          open: z.literal(true),
+          session_kind: z.literal("bundle_resources"),
+          resource_root: bundleResourceRootSchema,
+          ...detail,
+        }),
+        ...openLifecycleTargetVariants.map((variant) =>
+          sessionProviderFacts.extend({
+            open: z.literal(true),
+            ...variant.shape,
+            ...detail,
+          }),
+        ),
+      ]),
+    ),
   ),
   export_evidence_bundle: lifecycleResultOf(
     z.object({

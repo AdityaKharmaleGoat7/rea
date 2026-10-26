@@ -1,4 +1,4 @@
-import { ok as resultOk } from "../../../src/domain/result.js";
+import { ok as resultOk, err, ok } from "../../../src/domain/result.js";
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 
@@ -31,7 +31,6 @@ import { AnalysisProviderRegistry } from "../../../src/application/binary/Analys
 import { composeBinarySession } from "../../../src/application/binary/BinarySessionComposition.js";
 import { createAnalysisProfile } from "../../../src/domain/analysisProfile.js";
 import { AnalysisCancelledError } from "../../../src/domain/analysisErrorCore.js";
-import { err, ok } from "../../../src/domain/result.js";
 import {
   createCacheProvider,
   createTestBinarySession,
@@ -42,7 +41,7 @@ import { createEvidence } from "../../../src/domain/evidence.js";
 import { createServer } from "../../../src/server/createServer.js";
 import { registerGuidedPrompts } from "../../../src/server/registerPrompts.js";
 import { EvidenceMcpServer } from "../../../src/server/EvidenceMcpServer.js";
-import { ToolResultDelivery } from "../../../src/server/toolResult.js";
+import { createToolResultDelivery } from "../../../src/server/toolResult.js";
 import { observed } from "../../fixtures/analysisExecution.js";
 import { serveStreamableHttp } from "../../../src/server/http/serveStreamableHttp.js";
 
@@ -374,7 +373,7 @@ describe("guided prompt completion registry", () => {
 
   it("emits prompts/list_changed and exposes the updated prompt", async () => {
     const session = createTestBinarySession(createCacheProvider([]));
-    const delivery = new ToolResultDelivery(STDIO_DEFAULT_MAX_BUFFER_SIZE);
+    const delivery = createToolResultDelivery(STDIO_DEFAULT_MAX_BUFFER_SIZE);
     const server = new EvidenceMcpServer(
       { name: "prompt-registry-test", version: "1" },
       {},
@@ -505,7 +504,7 @@ it.each(["replacement", "shutdown"])(
       { name: "http-completion-drain", version: "1" },
       {},
       undefined,
-      new ToolResultDelivery(STDIO_DEFAULT_MAX_BUFFER_SIZE),
+      createToolResultDelivery(STDIO_DEFAULT_MAX_BUFFER_SIZE),
     );
     const connections = vi.spyOn(server, "connect");
     let calls = 0;
@@ -588,7 +587,7 @@ describe("guided prompt completion lifecycle", () => {
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const delivery = new ToolResultDelivery(STDIO_DEFAULT_MAX_BUFFER_SIZE);
+    const delivery = createToolResultDelivery(STDIO_DEFAULT_MAX_BUFFER_SIZE);
     const server = new EvidenceMcpServer(
       { name: "prompt-cancellation-test", version: "1" },
       {},

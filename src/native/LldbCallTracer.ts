@@ -14,9 +14,11 @@ import {
   AnalysisTimeoutError,
 } from "../domain/analysisErrorCore.js";
 import { EvidenceIntegrityError } from "../domain/evidenceErrors.js";
-import type { AnalysisError } from "../domain/analysisErrorBase.js";
+import type {
+  AnalysisError,
+  AnalysisCleanupObservation,
+} from "../domain/analysisErrorBase.js";
 import { projectAnalysisError } from "../domain/analysisErrorProjection.js";
-import type { AnalysisCleanupObservation } from "../domain/analysisErrorBase.js";
 import type { NativeCallPartialObservation } from "../domain/native/nativeCallPartialObservation.js";
 import {
   nativeCallEventSchema,
@@ -242,6 +244,7 @@ export class LldbCallTracer implements NativeCallTracer {
       files: new LldbReadbackFiles(),
       supervisor: undefined,
       pidPath: paths.pid,
+      resultPath: paths.result,
       targetIdentity: undefined,
       targetPid: undefined,
       processStopped: true,
@@ -431,16 +434,29 @@ export class LldbCallTracer implements NativeCallTracer {
     }
     if (owner.processStopped && !owner.targetStopped) {
       owner.targetPid = await owner.files.readTargetPid(owner.pidPath);
-      try {
-        const targetTermination = await ensureTerminated(
+      // A stopped LLDB may have published its result before interruption.
+      const published = await readTracerOutput(owner.resultPath, owner.files);
+      if (
+        bridgeProvesTargetGone(
+          published.ok ? published.value : undefined,
           owner.targetPid,
-          owner.targetIdentity,
-        );
-        if (targetTermination !== "terminated")
-          failures.push(new Error(targetTerminationReason(targetTermination)));
-        else owner.targetStopped = true;
-      } catch (cause: unknown) {
-        failures.push(cause);
+        )
+      )
+        owner.targetStopped = true;
+      else {
+        try {
+          const targetTermination = await ensureTerminated(
+            owner.targetPid,
+            owner.targetIdentity,
+          );
+          if (targetTermination !== "terminated")
+            failures.push(
+              new Error(targetTerminationReason(targetTermination)),
+            );
+          else owner.targetStopped = true;
+        } catch (cause: unknown) {
+          failures.push(cause);
+        }
       }
     }
     if (failures.length === 0) {
@@ -644,29 +660,22 @@ export class LldbCallTracer implements NativeCallTracer {
     retained.processStopped =
       exited.cleanupOwner === undefined && exited.cleanupFailure === undefined;
     retained.targetStopped = !exited.targetLaunched;
+    // The bridge publishes its result once, at the end of rea_trace. Once LLDB
+    // stopped, an interrupted run still owns that result's target facts, while
+    // only an exited LLDB selects it as the primary outcome.
     const readback =
-      exited.kind === "exited"
+      exited.kind === "exited" ||
+      (exited.targetLaunched && retained.processStopped)
         ? await readTracerOutput(paths.result, retained.files)
         : undefined;
-    const output = readback?.ok ? readback.value : undefined;
-    // An explicit bridge observation can prove no process was created or that
-    // the created process exited. A missing PID alone remains ambiguous.
-    const bridgeObservedExit =
-      output !== undefined &&
-      output.status !== "traced" &&
-      output.target_process_exit_observed === true;
+    const published = readback?.ok ? readback.value : undefined;
+    const output = exited.kind === "exited" ? published : undefined;
     retained.targetPid = await retained.files.readTargetPid(paths.pid);
-    let targetTermination: TargetTermination =
-      exited.targetLaunched && !bridgeObservedExit
+    const targetTermination: TargetTermination =
+      exited.targetLaunched &&
+      !bridgeProvesTargetGone(published, retained.targetPid)
         ? await ensureTerminated(retained.targetPid, exited.targetIdentity)
         : "terminated";
-    if (
-      output !== undefined &&
-      output.status !== "traced" &&
-      output.target_process_created === false &&
-      retained.targetPid === undefined
-    )
-      targetTermination = "terminated";
     retained.targetStopped = targetTermination === "terminated";
     if (
       retained.processStopped &&
@@ -691,22 +700,68 @@ export class LldbCallTracer implements NativeCallTracer {
         ? "cancelled"
         : exited.kind === "timeout"
           ? "timeout"
-          : exited.cleanupFailure !== undefined
+          : lifecycleCleanup !== undefined
             ? "cleanup-failure"
             : "tracer-failure";
-    const getPartialObservation = (
+    const readCompletedCaptures = async (
+      run: z.infer<typeof tracedSchema>,
+    ) => ({
+      stdout: await capturedOutput(
+        paths.stdoutCapture,
+        run.target_output.stdout_bytes,
+        run.target_output.stdout_truncated,
+        run.target_output.stdout_complete,
+        retained.files,
+      ),
+      stderr: await capturedOutput(
+        paths.stderrCapture,
+        run.target_output.stderr_bytes,
+        run.target_output.stderr_truncated,
+        run.target_output.stderr_complete,
+        retained.files,
+      ),
+    });
+    const getPartialObservation = async (
       reason: NativeCallPartialObservation["coverage"]["reason"] = partialReason,
-    ): Promise<PartialNativeObservationRead> =>
-      partialNativeObservation({
+    ): Promise<PartialNativeObservationRead> => {
+      // Cleanup uncertainty does not invalidate a completed, validated result.
+      // Keep host termination proof separate from the bridge's reported facts.
+      if (output?.status === "traced") {
+        const { stdout, stderr } = await readCompletedCaptures(output);
+        return {
+          observation: projectPartialNativeCalls(
+            {
+              path: request.executable,
+              sha256: request.expectedSha256,
+              architecture: request.architecture,
+            },
+            request.input,
+            {
+              debugger: { ...lldb, version: output.version },
+              run: output,
+              stdout: stdout.ok ? stdout.value : (stdout.partial ?? null),
+              stderr: stderr.ok ? stderr.value : (stderr.partial ?? null),
+              terminated,
+            },
+            reason,
+          ),
+          readFailures: [
+            ...(stdout.ok ? [] : [stdout.error]),
+            ...(stderr.ok ? [] : [stderr.error]),
+          ],
+        };
+      }
+      return partialNativeObservation({
         request,
         files: retained.files,
         pidPath: paths.pid,
         stdoutPath: paths.stdoutCapture,
         stderrPath: paths.stderrCapture,
         observationPath: paths.observations,
-        version: output?.status === "traced" ? output.version : null,
+        version: null,
         reason,
       });
+    };
     const failureWithPartial = async <Failure extends AnalysisError>(
       createFailure: (observation: NativeCallPartialObservation) => Failure,
       reason?: NativeCallPartialObservation["coverage"]["reason"],
@@ -818,20 +873,7 @@ export class LldbCallTracer implements NativeCallTracer {
               : { cleanup: lifecycleCleanup }),
           }),
       );
-    const stdout = await capturedOutput(
-      paths.stdoutCapture,
-      output.target_output.stdout_bytes,
-      output.target_output.stdout_truncated,
-      output.target_output.stdout_complete,
-      retained.files,
-    );
-    const stderr = await capturedOutput(
-      paths.stderrCapture,
-      output.target_output.stderr_bytes,
-      output.target_output.stderr_truncated,
-      output.target_output.stderr_complete,
-      retained.files,
-    );
+    const { stdout, stderr } = await readCompletedCaptures(output);
     if (!stdout.ok || !stderr.ok) {
       return err(
         new ProviderAdapterError(PROVIDER, OPERATION, {
@@ -1101,6 +1143,20 @@ const readTracerOutput = async (
   return output.success ? ok(output.data) : err(output.error);
 };
 
+/**
+ * An explicit bridge observation can prove no process was created (with no
+ * published PID) or that the created process exited. A missing PID alone, an
+ * unreadable result, or a traced result remains ambiguous.
+ */
+const bridgeProvesTargetGone = (
+  output: z.infer<typeof tracerOutputSchema> | undefined,
+  targetPid: number | undefined,
+): boolean =>
+  output !== undefined &&
+  output.status !== "traced" &&
+  (output.target_process_exit_observed === true ||
+    (output.target_process_created === false && targetPid === undefined));
+
 const capturedOutput = async (
   path: string,
   observedBytes: number,
@@ -1149,6 +1205,7 @@ interface RetainedLldbResources {
   readonly rootLease: AnalysisCleanupLease;
   readonly files: LldbReadbackFiles;
   readonly pidPath: string;
+  readonly resultPath: string;
   supervisor: ProviderProcessSupervisor | undefined;
   targetIdentity: string | undefined;
   targetPid: number | undefined;

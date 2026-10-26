@@ -207,7 +207,7 @@ cliTest.for(fixtures)(
           mode === "files" ? childPackages : [],
         );
       }
-      expect(await readFile(path)).toEqual(Buffer.from(bytes));
+      expect(Buffer.compare(await readFile(path), Buffer.from(bytes))).toBe(0);
     }
   },
 );
@@ -262,9 +262,11 @@ cliTest.for([
     for (const encrypted of [false, true]) {
       const writer = new ZipWriter(new Uint8ArrayWriter());
       for (const member of fixture.paths)
-        await writer.add(member, new TextReader("opaque fixture content"), {
-          ...(encrypted ? { password: "fixture-only" } : {}),
-        });
+        await writer.add(
+          member,
+          new TextReader("opaque fixture content"),
+          encrypted ? { password: "fixture-only" } : {},
+        );
       const bytes = await writer.close();
       const path = join(root, `${encrypted}.${fixture.extension}`);
       await writeFile(path, bytes);
@@ -349,7 +351,7 @@ cliTest.for([
           }
       }
       if (encrypted) expect(Object.values(graph.components).flat()).toEqual([]);
-      expect(await readFile(path)).toEqual(Buffer.from(bytes));
+      expect(Buffer.compare(await readFile(path), Buffer.from(bytes))).toBe(0);
     }
   },
 );

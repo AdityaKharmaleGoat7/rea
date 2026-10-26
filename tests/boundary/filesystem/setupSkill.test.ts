@@ -152,8 +152,8 @@ describe("skill recovery byte preservation", () => {
     });
     if (result.ok) throw new Error("Expected the injected write failure");
     expect(result.error.recoveryBackupPaths).toContain(recovery);
-    expect(await readFile(recovery)).toEqual(original);
-    expect(await readFile(manifest)).toEqual(original);
+    expect(Buffer.compare(await readFile(recovery), original)).toBe(0);
+    expect(Buffer.compare(await readFile(manifest), original)).toBe(0);
     expect(result.error.rollbackFailures).toEqual([]);
     expect(await readFile(firstBackup, "utf8")).toBe(
       "historical instructions V0\n",
@@ -638,6 +638,7 @@ describe("canonical skill transaction", () => {
       "SKILL.md",
       "references/android-applications.md",
       "references/connection-and-recovery.md",
+      "references/environments.md",
       "references/evidence-workflows.md",
       "references/javascript-applications.md",
       "references/native-and-artifacts.md",

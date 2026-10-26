@@ -1,18 +1,18 @@
 import type { JsonValue } from "../jsonValue.js";
 import { compareUnicodeCodePoints as compare } from "../unicodeCodePointOrder.js";
 import { literalSubstringPredicate } from "../analysisSearch.js";
+import { directionOf, orderRole } from "./environmentStateOrderParameters.js";
 import {
   isObject,
   recordedItemCount,
   formatItemCount,
-  pointerTo,
   renderStateList,
-  replaceAt,
   scalarText,
   type JsonObject,
   type StateEntity,
   type StateListView,
 } from "./environmentStateRules.js";
+import { counterAt, withCounter } from "./environmentStateCounters.js";
 
 /** What one list query parameter does to a list, learned from the recorded lines it explains. */
 export type QueryParameter =
@@ -41,26 +41,6 @@ export interface QueryLine {
   readonly entities: readonly StateEntity[];
 }
 
-const SORT = new Set([
-  "order",
-  "orderby",
-  "order_by",
-  "ordering",
-  "sort",
-  "sortby",
-  "sort_by",
-]);
-const DIRECTION = new Set([
-  "dir",
-  "direction",
-  "order",
-  "orderdirection",
-  "order_direction",
-  "sortdir",
-  "sort_dir",
-  "sortorder",
-  "sort_order",
-]);
 const LIMIT = new Set([
   "count",
   "itemsperpage",
@@ -83,7 +63,6 @@ const SEARCH = new Set([
   "searchterm",
   "term",
 ]);
-const DIRECTIONS = new Set(["asc", "desc"]);
 const IDENTIFYING = ["id", "slug", "name"];
 /** At most this many role combinations are tried for one line. */
 const MAX_COMBINATIONS = 256;
@@ -209,8 +188,9 @@ const readCall = (
       call.selections.push(contains(parameter.fields, value));
     } else if (parameter.role === "sort") call.sort = value;
     else if (parameter.role === "direction") {
-      if (!DIRECTIONS.has(value.toLowerCase())) return undefined;
-      call.direction = value.toLowerCase();
+      const direction = directionOf(value);
+      if (direction === undefined) return undefined;
+      call.direction = direction;
     } else if (parameter.role === "inert") {
       if (!parameter.values.includes(value)) return undefined;
     } else if (number === undefined) return undefined;
@@ -397,10 +377,9 @@ const choicesFor = (
     (SEARCH.has(key) && !plainSearch(value))
   )
     return [];
-  if (DIRECTION.has(key) && DIRECTIONS.has(value.toLowerCase()))
-    choices.push({ role: "direction" });
-  else if (SORT.has(key)) choices.push({ role: "sort" });
-  else if (LIMIT.has(key)) choices.push({ role: "limit" });
+  const order = orderRole(name, value);
+  if (order !== undefined) return order === "none" ? [] : [{ role: order }];
+  if (LIMIT.has(key)) choices.push({ role: "limit" });
   else if (OFFSET.has(key)) choices.push({ role: "offset" });
   else if (key === "page")
     choices.push({ role: "page", first: 1 }, { role: "page", first: 0 });
@@ -549,16 +528,45 @@ const mergeRoles = (
   return Object.fromEntries(merged);
 };
 
+/** Whether a filtered field is named like its parameter, an id suffix aside: `category`, `site_id` for `site`. */
+const namedLike = (field: string, name: string): boolean => {
+  const [left, right] = [normalized(field), normalized(name)];
+  return left === right || right === `${left}id` || left === `${right}id`;
+};
+
+/** The roles less any filter on a field named unlike its parameter that only one recorded value supports, since one line can match by coincidence. */
+const trustedRoles = (
+  parameters: Record<string, QueryParameter>,
+  explained: readonly {
+    readonly line: QueryLine;
+    readonly parameters: Record<string, QueryParameter>;
+  }[],
+): Record<string, QueryParameter> =>
+  Object.fromEntries(
+    Object.entries(parameters).filter(([name, role]) => {
+      if (role.role !== "filter" || namedLike(role.field, name)) return true;
+      const values = new Set(
+        explained
+          .filter((entry) => entry.parameters[name]?.role === "filter")
+          .map((entry) => entry.line.values.get(name)),
+      );
+      return values.size >= 2;
+    }),
+  );
+
 /** The query model that lists exactly what each explained line recorded, or undefined when none does. */
 export const learnQuery = (
   lines: readonly QueryLine[],
 ): Pick<ListQuery, "parameters" | "record_ordinals"> | undefined => {
   const explained = lines.flatMap((line) => {
     const parameters = explainLine(line);
-    return parameters === undefined ? [] : [parameters];
+    return parameters === undefined ? [] : [{ line, parameters }];
   });
   if (explained.length === 0) return undefined;
-  const parameters = mergeRoles(explained);
+  const parameters = trustedRoles(
+    mergeRoles(explained.map((entry) => entry.parameters)),
+    explained,
+  );
   const record_ordinals = lines
     .filter((line) => listsAsRecorded(line, parameters))
     .map((line) => line.ordinal);
@@ -590,11 +598,11 @@ export const renderQueryList = (
   total: number,
 ): JsonValue =>
   view.query.totals.reduce(
-    (body, name) =>
-      isObject(base) &&
-      Object.hasOwn(base, name) &&
-      queryTotalCount(base[name]) !== undefined
-        ? replaceAt(body, pointerTo(name), formatItemCount(total, base[name]!))
-        : body,
+    (body, name) => {
+      const recorded = counterAt(base, name);
+      return queryTotalCount(recorded) === undefined
+        ? body
+        : withCounter(body, name, formatItemCount(total, recorded!));
+    },
     renderStateList(view, base, items),
   );

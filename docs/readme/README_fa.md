@@ -1,7 +1,7 @@
 <div align="center" dir="rtl">
 
 [English](../../README.md) · [简体中文](README_zh.md) · [繁體中文](README_zh-TW.md) · [日本語](README_ja.md) · [한국어](README_ko.md) · [Türkçe](README_tr.md) · [Русский](README_ru.md) · [Tiếng Việt](README_vi.md) · [ไทย](README_th.md) · [Deutsch](README_de.md) · [Español](README_es.md) · [Français](README_fr.md) · [Українська](README_uk.md) · [Polski](README_pl.md) · [Português (Brasil)](README_pt-BR.md) · [العربية](README_ar.md) · **فارسی** · [Bahasa Indonesia](README_id.md) · [Italiano](README_it.md)
-· [Ελληνικά](README_el.md) · [മലയാളം](README_ml.md) · [Roman Urdu](README_ur-Latn.md)
+· [Ελληνικά](README_el.md) · [മലയാളം](README_ml.md) · [Roman Urdu](README_ur-Latn.md) · [Română](README_ro.md)
 
 # REA: مهندسی معکوس هر چیزی
 
@@ -20,7 +20,7 @@
 
 **[وب‌سایت](https://rea.tools/fa/) · [راهنماها](https://rea.tools/fa/guides/) · [نمونه‌های عملی](https://rea.tools/fa/showcase/)**
 
-[شروع سریع](#شروع-سریع) · [REA چگونه کار می‌کند؟](#rea-چگونه-کار-می‌کند) · [چه چیزهایی را میتوان تحلیل کرد؟](#چه-چیزهایی-را-می‌توان-تحلیل-کرد) · [نمونه‌های عملی](#نمونه‌های-عملی) · [پرسش‌های متداول](#پرسش‌های-متداول) · [ابزارهای GNU objdump و Rizin](../reverse-engineering-tools.md) · [مستندات](#مستندات)
+[شروع سریع](#شروع-سریع) · [REA چگونه کار می‌کند؟](#rea-چگونه-کار-می‌کند) · [چه چیزهایی را میتوان تحلیل کرد؟](#چه-چیزهایی-را-می‌توان-تحلیل-کرد) · [نمونه‌های عملی](#نمونه‌های-عملی) · [ساخت محیط‌های RL](#build-rl-environments) · [پرسش‌های متداول](#پرسش‌های-متداول) · [ابزارهای GNU objdump و Rizin](../reverse-engineering-tools.md) · [مستندات](#مستندات)
 
 <code>npx rea-agents setup</code>
 
@@ -150,6 +150,8 @@ REA به Node.js 22.x (>=22.23.4)، 24.x (>=24.22.1) یا 26+ (>=26.12.1)، به
 | بایت‌کد EVM             | selectorهای dispatch، offsetهای بایتی، آرگومان‌های استنباط‌شده و قابلیت تغییر وضعیت   | دادهٔ خام/hex محلی روی Linux x64؛ [راهنمای EVM آفلاین](../evm-bytecode.md)                                                          |
 | Rust binaries          | Embedded cargo-auditable dependency list                                            | [Rust binaries](../rust-binaries.md)                                                                                              |
 | ELF notes              | PT_NOTE/SHT_NOTE owners, types, GNU build-id and ABI-tag fields                     | Built-in static ELF inspection; [ELF notes](../elf-notes.md)                                                                      |
+| Apple IPS crashes      | .ips metadata, threads, images, registers and crash classes                         | Built-in static JSON inspection; [Apple IPS](../apple-ips.md)                                                                     |
+| Linux kernel modules   | .modinfo keys, __versions CRCs, this_module presence, and signature trailer         | Built-in static ELF inspection; [kernel modules](../kernel-modules.md)                                                            |
 | Erlang BEAM            | IFF chunks, atoms, exports, and tables                                              | Built-in static BEAM inspection; [Erlang BEAM](../erlang-beam.md)                                                                 |
 | کرش‌های ثبت‌شدهٔ لینوکس   | یادداشت‌های خام، رجیسترها/سیگنال‌های تمام threadهای ثبت‌شده و گزینه‌های احتمالی نگاشت   | pwntools تأمین‌شده توسط فراخواننده روی Linux x64؛ GDB/pwndbg اختیاری؛ [کرش‌های ثبت‌شده](../recorded-crashes.md)                      |
 | نصب‌های دسکتاپ          | نامزدهای زمان اجرا، فایل‌های شاهد، نشانه‌های مؤلفه‌ها و مراحل بعدی                     | بررسی محدود پوشه‌ها و سرآیندها；[برنامه‌های دسکتاپ](../desktop-applications.md)                                                     |
@@ -213,7 +215,50 @@ API کلیپ‌بورد در renderer را پیدا کنید، مسیر آن ر�
 
 [مطالعهٔ موردی](https://rea.tools/fa/showcase/th04/) · [مخزن بازسازی](https://github.com/N0zoM1z0/th04)
 
+### ساخت محیط‌های RL با REA
+
+یک نشست برنامهٔ وب را ضبط کنید، API آن را به ابزار تبدیل کنید و محیطی برای عامل هوش مصنوعی صادر کنید. آن را با AgentEnv اجرا کنید و کارها و بررسی پاداش را برای آموزش RL یا ارزیابی اضافه کنید.
+
+[راهنمای ساخت محیط](https://rea.tools/guides/rl-environments/) ·
+[نمایش را در X ببینید](https://x.com/reatools/status/2112574822584918075?s=20)
+
 اگر از REA برای بررسی موضوع جالبی استفاده کرده‌اید، خوشحال می‌شویم آن را به اشتراک بگذارید. یک [issue](https://github.com/morluto/rea/issues) یا [pull request](https://github.com/morluto/rea/pulls) ثبت کنید و هدف، پرسش خود، نقش REA و یافته‌هایتان را توضیح دهید.
+
+<a id="build-rl-environments"></a>
+
+## ساخت محیط‌های RL
+
+محیطی محلی بسازید تا عامل هوش مصنوعی بدون اجرای برنامهٔ اصلی، کارهایی مثل پیدا کردن یک مسئله یا ساخت پوشه را تمرین کند. از آن برای یادگیری تقویتی (RL) یا سنجش توانایی عامل در انجام کارها استفاده کنید.
+
+REA درخواست‌ها و پاسخ‌های ضبط‌شدهٔ API را به ابزارهایی تبدیل می‌کند که عامل می‌تواند فراخوانی کند. محیط از داده‌های ضبط‌شده استفاده می‌کند و فقط تغییراتی را پشتیبانی می‌کند که اثرشان در ضبط تأیید شده باشد.
+
+پس از راه‌اندازی REA در عامل، نشانی نمونه و کارهای مربوط به پوشه را با موارد خودتان جایگزین کنید:
+
+```text
+با REA از برنامهٔ وب آزمایشی من در این نشانی یک محیط RL بساز:
+http://127.0.0.1:3000
+فهرست کردن، ساختن، تغییر نام و حذف پوشه‌ها را پوشش بده. می‌توانی پوشه‌های
+آزمایشی بسازی و حذف کنی، اما داده‌های موجود را تغییر نده.
+در پوشه‌ای به نام my-env ذخیره کن، عملیات قابل استفاده را بررسی کن و روش اجرا را بگو.
+```
+
+<details>
+<summary>استفاده از خط فرمان</summary>
+
+اگر فایل ضبط درخواست‌ها و پاسخ‌های برنامه در مرورگر را دارید، از این فرمان‌ها استفاده کنید. اجرای نتیجه به AgentEnv و Docker هم نیاز دارد.
+
+```sh
+rea environment-build ./session.har ./my-env --name my-env --json
+agent-env run ./my-env
+```
+
+</details>
+
+REA محیطی آمادهٔ اجرا همراه با یک آزمون ساده برای بررسی شروع به کار و پاسخ‌گویی آن صادر می‌کند. آن را به چارچوب RL متصل کنید تا اهداف کارها و بررسی پاداش را تعریف و آموزش را اجرا کنید.
+
+[راهنمای ساخت محیط](https://rea.tools/guides/rl-environments/) ·
+[مرجع محیط‌ها](../agent-environments.md) ·
+[نمایش را در X ببینید](https://x.com/reatools/status/2112574822584918075?s=20)
 
 ## پرسش‌های متداول
 

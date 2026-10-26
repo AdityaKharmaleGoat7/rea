@@ -11,6 +11,7 @@ import type { AnalysisProfileCommitment } from "../domain/analysisProfile.js";
 import type { JsonValue } from "../domain/jsonValue.js";
 import type { Result } from "../domain/result.js";
 import type {
+  Evidence,
   EvidenceLocation,
   EvidenceSubjectTarget,
 } from "../domain/evidence.js";
@@ -51,6 +52,8 @@ export type AnalysisOperation =
 /** Atomic successful provider observation with exact producing provenance. */
 export interface AnalysisExecution extends AnalysisObservation {
   readonly provider: ProviderIdentity;
+  /** Session-issued identity of the committed record consumed by this execution. */
+  readonly evidenceId?: string;
   /** Result-specific veto of snapshot replay; Evidence remains retainable. */
   readonly cachePolicy?: "live";
   /**
@@ -70,6 +73,7 @@ interface CreateAnalysisExecutionOptions {
   readonly relationshipCoverage?: RelationshipCoverage;
   readonly referencesTruncated?: boolean;
   readonly locations?: readonly EvidenceLocation[];
+  readonly sourceEvidence?: readonly Evidence[];
   readonly subject?: EvidenceSubjectTarget | null;
 }
 
@@ -120,6 +124,9 @@ export function createAnalysisExecution(
       ? {}
       : { referencesTruncated: options.referencesTruncated }),
     locations: [...(options.locations ?? [])],
+    ...(options.sourceEvidence === undefined
+      ? {}
+      : { sourceEvidence: Object.freeze([...options.sourceEvidence]) }),
     ...(options.subject === undefined ? {} : { subject: options.subject }),
   };
 }

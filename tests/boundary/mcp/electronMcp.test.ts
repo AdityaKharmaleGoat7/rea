@@ -1,5 +1,5 @@
 import { parseEvidence } from "../../../src/domain/evidence.js";
-import { ok as resultOk } from "../../../src/domain/result.js";
+import { ok as resultOk, err } from "../../../src/domain/result.js";
 import { rm, symlink, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -31,7 +31,6 @@ import { toolAvailabilityInventory } from "../../../src/contracts/toolOutputSche
 import { AnalysisCancelledError } from "../../../src/domain/analysisErrorCore.js";
 import { emptyElectronPageCoverage } from "../../../src/domain/javascript/electronPageInspection.fixture.js";
 import type { ElectronPageInspection } from "../../../src/domain/javascript/electronObservation.js";
-import { err } from "../../../src/domain/result.js";
 
 const browsers: FakeCdpBrowser[] = [];
 const resources: Array<{ close(): Promise<unknown> }> = [];
@@ -249,7 +248,7 @@ it("advertises owned JavaScript analysis effects without foreign target executio
 
   const status = await client.callTool({
     name: "binary_session",
-    arguments: {},
+    arguments: { detail: "complete" },
   });
   expect(status.isError).not.toBe(true);
   const { result } = z
