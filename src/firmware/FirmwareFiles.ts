@@ -12,6 +12,10 @@ import {
   AnalysisOutputError,
 } from "../domain/analysisErrorCore.js";
 import type { FirmwareRequest } from "../domain/firmware/firmwareAnalysis.js";
+import {
+  MAX_FIRMWARE_STAGING_BYTES,
+  MAX_FIRMWARE_STAGING_ENTRIES,
+} from "../domain/firmware/firmwareAnalysis.js";
 import { absoluteCallerPath } from "../filesystem/callerPath.js";
 import { readLinuxResourceLimits } from "../process/LinuxResourceLimits.js";
 import { readBoundedFileBytes } from "../process/BoundedFileBytes.js";
@@ -89,7 +93,7 @@ export class FirmwareFileAccess {
       path,
       this.#resources,
       signal,
-      async (handle) => {
+      async ({ handle }) => {
         const hash = createHash("sha256");
         for await (const chunk of readArtifactFileChunks(handle, { signal })) {
           assertArtifactReadActive(signal);
@@ -121,8 +125,7 @@ export class FirmwareFileAccess {
       source,
       this.#resources,
       signal,
-      async (handle) => {
-        const stat = await handle.stat();
+      async ({ handle, initial: stat }) => {
         sourceAdmitted = true;
         if (stat.size === 0 || stat.size > FIRMWARE_LIMITS.inputBytes)
           throw firmwareInputFailure(request.operation);
@@ -175,7 +178,7 @@ export class FirmwareFileAccess {
         fullPath,
         this.#resources,
         signal,
-        async (handle) => {
+        async ({ handle }) => {
           await pipeline(
             readArtifactFileChunks(handle, {
               start: offset,
@@ -209,20 +212,24 @@ export class FirmwareFileAccess {
     signal: AbortSignal,
   ) {
     return this.#resources.run(() =>
-      withArtifactRegularFile(entry.path, this.#resources, signal, (handle) =>
-        tree.write(
-          entry.relativePath,
-          // SafeOutputTree awaits destination setup before consuming. Defer
-          // the abort-bound descriptor stream until it has a consumer.
-          Readable.from(
-            (async function* () {
-              assertArtifactReadActive(signal);
-              yield* readArtifactFileChunks(handle, { signal });
-            })(),
+      withArtifactRegularFile(
+        entry.path,
+        this.#resources,
+        signal,
+        ({ handle }) =>
+          tree.write(
+            entry.relativePath,
+            // SafeOutputTree awaits destination setup before consuming. Defer
+            // the abort-bound descriptor stream until it has a consumer.
+            Readable.from(
+              (async function* () {
+                assertArtifactReadActive(signal);
+                yield* readArtifactFileChunks(handle, { signal });
+              })(),
+            ),
+            { sha256, bytes: entry.size },
+            signal,
           ),
-          { sha256, bytes: entry.size },
-          signal,
-        ),
       ),
     );
   }
@@ -238,36 +245,41 @@ export class FirmwareFileAccess {
     signal?: AbortSignal,
   ): Promise<unknown> {
     return this.#resources.run(() =>
-      withArtifactRegularFile(path, this.#resources, signal, async (handle) => {
-        const bytes = await readBoundedFileBytes(
-          handle,
-          FIRMWARE_LIMITS.reportBytes,
-        );
-        if (bytes === undefined)
-          throw firmwareReportFailure(
-            operation,
-            "oversized",
-            `Report exceeded ${FIRMWARE_LIMITS.reportBytes} bytes`,
+      withArtifactRegularFile(
+        path,
+        this.#resources,
+        signal,
+        async ({ handle }) => {
+          const bytes = await readBoundedFileBytes(
+            handle,
+            FIRMWARE_LIMITS.reportBytes,
           );
-        assertArtifactReadActive(signal);
-        if (bytes.length === 0)
-          throw firmwareReportFailure(operation, "empty", "Report is empty");
-        try {
-          const value: unknown = JSON.parse(
-            new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
-              bytes,
-            ),
-          );
-          return value;
-        } catch (cause: unknown) {
-          throw firmwareReportFailure(
-            operation,
-            "invalid_json",
-            "Tool report is not valid complete JSON",
-            cause,
-          );
-        }
-      }).catch((cause: unknown) => {
+          if (bytes === undefined)
+            throw firmwareReportFailure(
+              operation,
+              "oversized",
+              `Report exceeded ${FIRMWARE_LIMITS.reportBytes} bytes`,
+            );
+          assertArtifactReadActive(signal);
+          if (bytes.length === 0)
+            throw firmwareReportFailure(operation, "empty", "Report is empty");
+          try {
+            const value: unknown = JSON.parse(
+              new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
+                bytes,
+              ),
+            );
+            return value;
+          } catch (cause: unknown) {
+            throw firmwareReportFailure(
+              operation,
+              "invalid_json",
+              "Tool report is not valid complete JSON",
+              cause,
+            );
+          }
+        },
+      ).catch((cause: unknown) => {
         throw mapArtifactFileFailure(cause, (primary) =>
           primary instanceof NonRegularFileReadError
             ? firmwareReportFailure(
@@ -442,6 +454,27 @@ export const inventoryFirmwareOutput = async (
   );
 };
 
+/**
+ * Recovery for one staging budget refusal. At the schema ceiling a larger
+ * selection is impossible, so that case must not recommend raising the value.
+ */
+export const firmwareStagingBudgetRemediation = (
+  budget: "max_output_files" | "max_output_bytes",
+  selectedLimit: number,
+): string => {
+  const maximum =
+    budget === "max_output_files"
+      ? MAX_FIRMWARE_STAGING_ENTRIES
+      : MAX_FIRMWARE_STAGING_BYTES;
+  const description =
+    budget === "max_output_files"
+      ? "staging entry budget, which counts extracted directories and links"
+      : "staging file-byte budget, checked during extraction";
+  if (selectedLimit < maximum)
+    return `The ${description} was exceeded (${budget}=${String(selectedLimit)}; supported maximum ${String(maximum)}). Increase ${budget} up to ${String(maximum)} if the larger extraction is required, or select a materially narrower firmware byte range. analysis_timeout_ms does not raise this staging allowance.`;
+  return `The ${description} reached its supported maximum (${budget}=${String(selectedLimit)}; maximum ${String(maximum)}). Raising ${budget} further is not supported. Select a smaller firmware byte range or analyze a smaller image. analysis_timeout_ms does not raise this staging allowance.`;
+};
+
 /** The same selected aggregate budget is enforced during and after extraction. */
 const firmwareStagingLimit = (
   operation: string,
@@ -455,7 +488,7 @@ const firmwareStagingLimit = (
     { [field]: maximum },
     {
       retryable: false,
-      remediationAction: `Increase ${field} within its schema maximum if the larger extraction is required, or select a materially narrower range. analysis_timeout_ms does not raise this staging allowance. Repeating the unchanged request fails the same way.`,
+      remediationAction: firmwareStagingBudgetRemediation(field, maximum),
     },
   );
 

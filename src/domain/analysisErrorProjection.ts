@@ -92,6 +92,7 @@ const projectError = (
   const primaryDetails = errorDetails(primary);
   const details = {
     ...primaryDetails,
+    ...(primary.limit === undefined ? {} : { limit: { ...primary.limit } }),
     ...(cleanupReport === undefined
       ? {}
       : { cleanup_report: jsonValueSchema.parse(cleanupReport) }),
@@ -367,6 +368,7 @@ const requestErrorDetails = (
         reason: issue.reason,
         ...(issue.message === undefined ? {} : { message: issue.message }),
         ...(issue.expected === undefined ? {} : { expected: issue.expected }),
+        ...(issue.observed === undefined ? {} : { observed: issue.observed }),
         ...(issue.minimum === undefined ? {} : { minimum: issue.minimum }),
         ...(issue.maximum === undefined ? {} : { maximum: issue.maximum }),
       })),

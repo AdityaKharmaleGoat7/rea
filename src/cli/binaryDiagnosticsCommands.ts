@@ -1,3 +1,5 @@
+import { inspectDevicetreeInputSchema } from "../domain/firmware/devicetree.js";
+import { inspectPeLoadConfigInputSchema } from "../domain/native/peLoadConfig.js";
 import { inspectByteEntropyInputSchema } from "../domain/native/byteEntropy.js";
 import { z } from "incur";
 import {
@@ -5,6 +7,10 @@ import {
   createRecordedCrashService,
   createBinaryLayoutService,
   createElfNotesService,
+  createAppleIpsService,
+  createDevicetreeService,
+  createKernelModuleService,
+  createPeLoadConfigService,
   createPeResourcesService,
   createPeCertificatesService,
   createPeImportsService,
@@ -22,6 +28,8 @@ import { inspectPeCertificatesInputSchema } from "../domain/native/peCertificate
 import { inspectPeImportsInputSchema } from "../domain/native/peImports.js";
 import { inspectNativeExportsInputSchema } from "../domain/native/nativeExports.js";
 import { inspectElfNotesInputSchema } from "../domain/native/elfNotes.js";
+import { inspectAppleIpsInputSchema } from "../domain/native/appleIps.js";
+import { inspectKernelModuleInputSchema } from "../domain/native/kernelModule.js";
 import { projectAnalysisError } from "../domain/analysisErrorProjection.js";
 import { finishAnalysisCommand } from "./finishAnalysisCommand.js";
 import { localPathStringSchema } from "../domain/localPath.js";
@@ -67,6 +75,122 @@ export const registerBinaryDiagnosticsCommands = (
               elf,
               "rea-elf-notes",
               "inspect_elf_notes",
+              signal,
+            ),
+        );
+      }),
+  });
+  cli.command(CLI_COMMANDS.inspectAppleIps, {
+    description:
+      "Inspect an Apple .ips crash report without executing a target",
+    args: z.object({
+      path: z.string().describe("Local Apple .ips crash report"),
+    }),
+    options: z.object({
+      maxFileBytes: inspectAppleIpsInputSchema.shape.max_file_bytes,
+      maxThreads: inspectAppleIpsInputSchema.shape.max_threads,
+      maxFrames: inspectAppleIpsInputSchema.shape.max_frames,
+      maxImages: inspectAppleIpsInputSchema.shape.max_images,
+      maxRegisters: inspectAppleIpsInputSchema.shape.max_registers,
+      maxIntegerTextBytes:
+        inspectAppleIpsInputSchema.shape.max_integer_text_bytes,
+    }),
+    run: ({ args, options }) =>
+      withCommandCancellation(async (signal) => {
+        const ips = createAppleIpsService();
+        return await logCliCommand(
+          logger,
+          CLI_COMMANDS.inspectAppleIps,
+          async () =>
+            finishAnalysisCommand(
+              () =>
+                ips.inspect(
+                  {
+                    path: absoluteCallerPath(args.path),
+                    max_file_bytes: options.maxFileBytes,
+                    max_threads: options.maxThreads,
+                    max_frames: options.maxFrames,
+                    max_images: options.maxImages,
+                    max_registers: options.maxRegisters,
+                    max_integer_text_bytes: options.maxIntegerTextBytes,
+                  },
+                  { signal },
+                ),
+              ips,
+              "rea-apple-ips",
+              "inspect_apple_ips",
+              signal,
+            ),
+        );
+      }),
+  });
+  cli.command(CLI_COMMANDS.inspectKernelModule, {
+    description:
+      "Inspect Linux kernel module metadata without executing the module",
+    args: z.object({
+      path: localPathStringSchema.describe(
+        "Local ELF32/ELF64 kernel module or compressed .ko container",
+      ),
+    }),
+    options: z.object({
+      maxFileBytes: inspectKernelModuleInputSchema.shape.max_file_bytes,
+      maxEntries: inspectKernelModuleInputSchema.shape.max_entries,
+    }),
+    run: ({ args, options }) =>
+      withCommandCancellation(async (signal) => {
+        const kernelModule = createKernelModuleService();
+        return await logCliCommand(
+          logger,
+          CLI_COMMANDS.inspectKernelModule,
+          async () =>
+            finishAnalysisCommand(
+              () =>
+                kernelModule.inspect(
+                  {
+                    path: absoluteCallerPath(args.path),
+                    max_file_bytes: options.maxFileBytes,
+                    max_entries: options.maxEntries,
+                  },
+                  { signal },
+                ),
+              kernelModule,
+              "rea-kernel-module",
+              "inspect_kernel_module",
+              signal,
+            ),
+        );
+      }),
+  });
+  cli.command(CLI_COMMANDS.inspectPeLoadConfig, {
+    description:
+      "Inspect PE TLS callbacks and load configuration without executing the image",
+    args: z.object({
+      path: localPathStringSchema.describe("Local PE32/PE32+ image"),
+    }),
+    options: z.object({
+      maxFileBytes: inspectPeLoadConfigInputSchema.shape.max_file_bytes,
+      maxCallbacks: inspectPeLoadConfigInputSchema.shape.max_callbacks,
+    }),
+    run: ({ args, options }) =>
+      withCommandCancellation(async (signal) => {
+        const elf = createPeLoadConfigService();
+        return await logCliCommand(
+          logger,
+          CLI_COMMANDS.inspectPeLoadConfig,
+          async () =>
+            finishAnalysisCommand(
+              () =>
+                elf.inspect(
+                  {
+                    path: absoluteCallerPath(args.path),
+                    max_file_bytes: options.maxFileBytes,
+                    max_callbacks: options.maxCallbacks,
+                  },
+                  { signal },
+                ),
+              elf,
+              "rea-pe-load-config",
+              "inspect_pe_load_config",
               signal,
             ),
         );
@@ -212,6 +336,55 @@ export const registerBinaryDiagnosticsCommands = (
               "inspect_pe_resources",
               signal,
             ),
+        );
+      }),
+  });
+  cli.command(CLI_COMMANDS.inspectDevicetree, {
+    description: "Inspect a flattened devicetree blob without executing it",
+    args: z.object({
+      path: localPathStringSchema.describe("Local flattened devicetree image"),
+    }),
+    options: z.object({
+      maxFileBytes: inspectDevicetreeInputSchema.shape.max_file_bytes.describe(
+        "Maximum FDT file size in bytes (default 4194304)",
+      ),
+      maxNodes: inspectDevicetreeInputSchema.shape.max_nodes.describe(
+        "Maximum number of device-tree nodes (default 8192)",
+      ),
+      maxProperties: inspectDevicetreeInputSchema.shape.max_properties.describe(
+        "Maximum number of device-tree properties (default 32768)",
+      ),
+      maxDepth: inspectDevicetreeInputSchema.shape.max_depth.describe(
+        "Maximum device-tree nesting depth (default 64)",
+      ),
+      ...analysisEvidenceDeliveryOptions,
+    }),
+    run: ({ args, options }) =>
+      withCommandCancellation(async (signal) => {
+        const devicetree = createDevicetreeService();
+        return await logCliCommand(
+          logger,
+          CLI_COMMANDS.inspectDevicetree,
+          async () =>
+            deliverCliAnalysisEvidence({
+              run: () =>
+                devicetree.inspect(
+                  {
+                    path: absoluteCallerPath(args.path),
+                    max_file_bytes: options.maxFileBytes,
+                    max_nodes: options.maxNodes,
+                    max_properties: options.maxProperties,
+                    max_depth: options.maxDepth,
+                  },
+                  { signal },
+                ),
+              service: devicetree,
+              providerId: "rea-devicetree",
+              operation: "inspect_devicetree",
+              signal,
+              detail: options.detail,
+              evidenceOutput: options.evidence_output,
+            }),
         );
       }),
   });

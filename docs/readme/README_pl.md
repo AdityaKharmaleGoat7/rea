@@ -1,7 +1,7 @@
 <div align="center">
 
 [English](../../README.md) · [简体中文](README_zh.md) · [繁體中文](README_zh-TW.md) · [日本語](README_ja.md) · [한국어](README_ko.md) · [Türkçe](README_tr.md) · [Русский](README_ru.md) · [Tiếng Việt](README_vi.md) · [ไทย](README_th.md) · [Deutsch](README_de.md) · [Español](README_es.md) · [Français](README_fr.md) · [Українська](README_uk.md) · **Polski** · [Português (Brasil)](README_pt-BR.md) · [العربية](README_ar.md) · [فارسی](README_fa.md) · [Bahasa Indonesia](README_id.md) · [Italiano](README_it.md)
-· [Ελληνικά](README_el.md) · [മലയാളം](README_ml.md) · [Roman Urdu](README_ur-Latn.md)
+· [Ελληνικά](README_el.md) · [മലയാളം](README_ml.md) · [Roman Urdu](README_ur-Latn.md) · [Română](README_ro.md)
 
 # REA: Reverse Engineer Anything
 
@@ -20,7 +20,7 @@
 
 **[Strona internetowa](https://rea.tools/pl/) · [Przewodniki](https://rea.tools/pl/guides/) · [Przykłady zastosowań](https://rea.tools/pl/showcase/)**
 
-[Szybki start](#szybki-start) · [Jak działa REA](#jak-działa-rea) · [Co możesz analizować](#co-możesz-analizować) · [Przykłady zastosowań](#przykłady-zastosowań) · [FAQ](#faq) · [Narzędzia GNU objdump i Rizin](../reverse-engineering-tools.md) · [Dokumentacja](#dokumentacja)
+[Szybki start](#szybki-start) · [Jak działa REA](#jak-działa-rea) · [Co możesz analizować](#co-możesz-analizować) · [Przykłady zastosowań](#przykłady-zastosowań) · [Tworzenie środowisk RL](#build-rl-environments) · [FAQ](#faq) · [Narzędzia GNU objdump i Rizin](../reverse-engineering-tools.md) · [Dokumentacja](#dokumentacja)
 
 <code>npx rea-agents setup</code>
 
@@ -158,7 +158,9 @@ REA wymaga Node.js 22.x (>=22.23.4), 24.x (>=24.22.1) lub 26+ (>=26.12.1) oraz n
 | Kod bajtowy EVM                         | Selektory wywołań, przesunięcia bajtowe, wywnioskowane argumenty i mutowalność                                        | Lokalny plik z surowymi bajtami lub zapisem szesnastkowym w systemie Linux x64; [przewodnik EVM offline](../evm-bytecode.md)                          |
 | Rust binaries                           | Embedded cargo-auditable dependency list                                                                              | [Rust binaries](../rust-binaries.md)                                                                                                                  |
 | ELF notes                               | PT_NOTE/SHT_NOTE owners, types, GNU build-id and ABI-tag fields                                                       | Built-in static ELF inspection; [ELF notes](../elf-notes.md)                                                                                          |
+| Linux kernel modules                    | .modinfo keys, __versions CRCs, this_module presence, and signature trailer                                           | Built-in static ELF inspection; [kernel modules](../kernel-modules.md)                                                                                |
 | Erlang BEAM                             | IFF chunks, atoms, exports, and tables                                                                                | Built-in static BEAM inspection; [Erlang BEAM](../erlang-beam.md)                                                                                     |
+| Apple IPS crashes                       | .ips metadata, threads, images, registers and crash classes                                                           | Built-in static JSON inspection; [Apple IPS](../apple-ips.md)                                                                                         |
 | Zarejestrowane awarie systemu Linux     | Surowe rekordy note, rejestry/sygnały każdego zarejestrowanego wątku i opcjonalni kandydaci na mapowania              | pwntools dostarczone przez użytkownika w systemie Linux x64; opcjonalnie GDB/pwndbg; [zarejestrowane awarie](../recorded-crashes.md)                  |
 | Instalacje desktopowe                   | Kandydaci środowisk uruchomieniowych, pliki źródłowe dowodów, komponenty i dalsze kroki                               | Ograniczona inspekcja katalogów i nagłówków；[Aplikacje desktopowe](../desktop-applications.md)                                                       |
 | JavaScript / Electron                   | Moduły, importy, mapy źródeł, trasy, IPC i powiązania z natywnymi dodatkami                                           | Node.js i npm; [analiza aplikacji](../javascript-application-workflows.md); Linux: procps `ps`                                                        |
@@ -221,7 +223,50 @@ Sprawdź 16-bitowe instrukcje oryginalnej gry na PC-98, odtwórz obliczenia kąt
 
 [Przeczytaj studium przypadku](https://rea.tools/pl/showcase/th04/) · [Repozytorium odtworzonej implementacji](https://github.com/N0zoM1z0/th04)
 
+### Twórz środowiska RL z REA
+
+Nagraj sesję aplikacji internetowej, zamień jej API w narzędzia i wyeksportuj środowisko dla agenta AI. Uruchom je za pomocą AgentEnv, a następnie dodaj zadania i sprawdzanie nagród do treningu RL lub oceny.
+
+[Przewodnik tworzenia środowiska](https://rea.tools/guides/rl-environments/) ·
+[Obejrzyj demo w X](https://x.com/reatools/status/2112574822584918075?s=20)
+
 Jeśli użyłeś REA do czegoś ciekawego, chętnie to zobaczymy. Opisz swój przypadek w [zgłoszeniu](https://github.com/morluto/rea/issues) lub [pull requeście](https://github.com/morluto/rea/pulls), podając cel analizy, pytanie, sposób, w jaki REA pomogło, i swoje ustalenia.
+
+<a id="build-rl-environments"></a>
+
+## Tworzenie środowisk RL
+
+Stwórz lokalne środowisko, w którym agent AI może ćwiczyć zadania, takie jak wyszukiwanie zgłoszenia lub tworzenie folderu, bez uruchamiania oryginalnej aplikacji. Użyj go do uczenia ze wzmocnieniem (RL) lub sprawdzania, jak agent wykonuje zadania.
+
+REA zamienia nagrane żądania i odpowiedzi API w narzędzia, które agent może wywoływać. Środowisko używa nagranych danych i obsługuje zmiany tylko wtedy, gdy nagranie potwierdza ich efekty.
+
+Skonfiguruj REA w agencie, a następnie zastąp przykładowy URL i zadania dotyczące folderów własnymi:
+
+```text
+Za pomocą REA zbuduj środowisko RL z mojej testowej aplikacji internetowej:
+http://127.0.0.1:3000
+Uwzględnij wyświetlanie listy folderów, tworzenie, zmianę nazwy i usuwanie.
+Możesz tworzyć i usuwać foldery testowe. Nie zmieniaj istniejących danych.
+Zapisz w folderze my-env, sprawdź dostępne operacje i powiedz mi, jak uruchomić środowisko.
+```
+
+<details>
+<summary>Użyj wiersza poleceń</summary>
+
+Użyj tych poleceń, jeśli masz już plik z nagranymi żądaniami i odpowiedziami aplikacji w przeglądarce. Do uruchomienia wyniku potrzebujesz też AgentEnv i Dockera.
+
+```sh
+rea environment-build ./session.har ./my-env --name my-env --json
+agent-env run ./my-env
+```
+
+</details>
+
+REA eksportuje gotowe do uruchomienia środowisko z podstawowym testem uruchamiania i odpowiedzi. Połącz je ze swoim frameworkiem RL, aby określić cele zadań, dodać sprawdzanie nagród i uruchomić trening.
+
+[Przewodnik tworzenia środowiska](https://rea.tools/guides/rl-environments/) ·
+[Dokumentacja środowisk](../agent-environments.md) ·
+[Obejrzyj demo w X](https://x.com/reatools/status/2112574822584918075?s=20)
 
 ## FAQ
 

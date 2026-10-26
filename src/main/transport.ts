@@ -1,3 +1,4 @@
+import type { AnalysisSettings } from "../application/AnalysisSettings.js";
 import { createAndroidAnalysisProvider } from "../composition/android.js";
 import type { AndroidAnalysisPort } from "../application/android/AndroidAnalysisPort.js";
 
@@ -5,7 +6,7 @@ import type { BinarySession } from "../application/binary/BinarySession.js";
 import type { Logger } from "pino";
 import { createServer } from "../server/createServer.js";
 import { StreamableHttpListenError } from "../server/http/streamableHttpListenError.js";
-import type { ToolResultDelivery } from "../server/toolResult.js";
+import type { ToolResultDelivery } from "../server/ToolResultDelivery.js";
 import type { McpServerHandle, RuntimeDependencies } from "./types.js";
 import type { OptionalProviderLoadResult } from "../application/OptionalObservationProviders.js";
 import { OwnedMcpServers } from "./OwnedMcpServers.js";
@@ -16,6 +17,7 @@ import {
 } from "./messages.js";
 
 interface ServerContext {
+  readonly analysisSettings?: AnalysisSettings;
   readonly environment: Readonly<NodeJS.ProcessEnv>;
   readonly delivery: ToolResultDelivery;
   readonly logger: Logger;
@@ -124,11 +126,16 @@ export const startMcpTransport = async (
           // The SDK can discard a discovery probe and construct a replacement server.
           const android = createAndroidAnalysisProvider(
             serverContext.environment,
+            undefined,
+            serverContext.analysisSettings?.read,
           );
           androidProviders.add(android);
           const server = (dependencies.createServer ?? createServer)(
             { kind: "session", session },
             {
+              ...(serverContext.analysisSettings === undefined
+                ? {}
+                : { analysisSettings: serverContext.analysisSettings }),
               logger: serverContext.logger,
               environment: serverContext.environment,
               delivery: serverContext.delivery,

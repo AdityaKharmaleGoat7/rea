@@ -40,18 +40,37 @@ const isObjectArray = (value: unknown): value is Record<string, unknown>[] =>
   value.length > 0 &&
   value.every(
     (item) => typeof item === "object" && item !== null && !Array.isArray(item),
-  );
+  ) &&
+  value.some((item) => Object.keys(item).length > 0);
+
+const isWordCharacter = (character: string | undefined): boolean =>
+  character !== undefined && /[\p{L}\p{N}]/u.test(character);
+
+/** Underscore runs between word characters cannot open or close emphasis. */
+const escapeInlineSyntax = (
+  match: string,
+  offset: number,
+  text: string,
+): string =>
+  match.startsWith("_") &&
+  isWordCharacter(text[offset - 1]) &&
+  isWordCharacter(text[offset + match.length])
+    ? match
+    : match.replace(/./g, "\\$&");
 
 const escapeTableCell = (value: string): string =>
   value
-    .replace(/\\/g, "\\\\")
-    .replace(/\|/g, "\\|")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/[\\|`*[\]~]|_+/g, escapeInlineSyntax)
     .replace(/\r\n|\r|\n/g, "<br>");
 
 const renderTable = (
   headers: readonly string[],
   rows: readonly string[][],
 ): string => {
+  if (headers.length === 0) return "";
   const escapedHeaders = headers.map(escapeTableCell);
   const widths = escapedHeaders.map((header) => header.length);
   for (const row of rows) {
@@ -102,9 +121,14 @@ const formatObjectTable = (
         seen.add(key);
         headers.push(key);
       }
+  if (headers.length === 0) return markdownCell(items);
   return renderTable(
     headers,
-    items.map((item) => headers.map((key) => markdownCell(item[key]))),
+    items.map((item) =>
+      headers.map((key) =>
+        markdownCell(Object.hasOwn(item, key) ? item[key] : undefined),
+      ),
+    ),
   );
 };
 

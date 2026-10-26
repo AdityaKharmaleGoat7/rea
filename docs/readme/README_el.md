@@ -1,6 +1,6 @@
 <div align="center">
 
-[English](../../README.md) · [简体中文](README_zh.md) · [繁體中文](README_zh-TW.md) · [日本語](README_ja.md) · [한국어](README_ko.md) · [Türkçe](README_tr.md) · [Русский](README_ru.md) · [Tiếng Việt](README_vi.md) · [ไทย](README_th.md) · [Deutsch](README_de.md) · [Español](README_es.md) · [Français](README_fr.md) · [Українська](README_uk.md) · [Polski](README_pl.md) · [Português (Brasil)](README_pt-BR.md) · [العربية](README_ar.md) · [فارسی](README_fa.md) · [Bahasa Indonesia](README_id.md) · [Italiano](README_it.md) · **Ελληνικά** · [മലയാളം](README_ml.md) · [Roman Urdu](README_ur-Latn.md)
+[English](../../README.md) · [简体中文](README_zh.md) · [繁體中文](README_zh-TW.md) · [日本語](README_ja.md) · [한국어](README_ko.md) · [Türkçe](README_tr.md) · [Русский](README_ru.md) · [Tiếng Việt](README_vi.md) · [ไทย](README_th.md) · [Deutsch](README_de.md) · [Español](README_es.md) · [Français](README_fr.md) · [Українська](README_uk.md) · [Polski](README_pl.md) · [Português (Brasil)](README_pt-BR.md) · [العربية](README_ar.md) · [فارسی](README_fa.md) · [Bahasa Indonesia](README_id.md) · [Italiano](README_it.md) · **Ελληνικά** · [മലയാളം](README_ml.md) · [Roman Urdu](README_ur-Latn.md) · [Română](README_ro.md)
 
 # REA: Reverse Engineer Anything
 
@@ -19,7 +19,7 @@
 
 **[Ιστότοπος](https://rea.tools/) · [Οδηγοί](https://rea.tools/guides/) · [Μελέτες περίπτωσης](https://rea.tools/showcase/)**
 
-[Γρήγορη εκκίνηση](#γρήγορη-εκκίνηση) · [Πώς λειτουργεί το REA](#πώς-λειτουργεί-το-rea) · [Τι μπορείς να αναλύσεις](#τι-μπορείς-να-αναλύσεις) · [Μελέτες περίπτωσης](#μελέτες-περίπτωσης) · [Συχνές ερωτήσεις](#συχνές-ερωτήσεις) · [Τεκμηρίωση](#τεκμηρίωση)
+[Γρήγορη εκκίνηση](#γρήγορη-εκκίνηση) · [Πώς λειτουργεί το REA](#πώς-λειτουργεί-το-rea) · [Τι μπορείς να αναλύσεις](#τι-μπορείς-να-αναλύσεις) · [Μελέτες περίπτωσης](#μελέτες-περίπτωσης) · [Δημιουργία περιβαλλόντων RL](#build-rl-environments) · [Συχνές ερωτήσεις](#συχνές-ερωτήσεις) · [Τεκμηρίωση](#τεκμηρίωση)
 
 <code>npx rea-agents setup</code>
 
@@ -158,6 +158,8 @@ npx rea-agents@latest setup
 | PE certificates                        | Authenticode WIN_CERTIFICATE entries and PKCS#7 signer/X.509 identity fields                                                | Built-in static PE inspection; [PE certificates](../pe-certificates.md)                                                             |
 | PE imports                             | Import and delay-load DLL names, ordinals, IAT RVAs and pefile import hash                                                  | Built-in static PE inspection; [PE imports](../pe-imports.md)                                                                       |
 | ELF notes                              | PT_NOTE/SHT_NOTE owners, types, GNU build-id and ABI-tag fields                                                             | Built-in static ELF inspection; [ELF notes](../elf-notes.md)                                                                        |
+| Apple IPS crashes                      | .ips metadata, threads, images, registers and crash classes                                                                 | Built-in static JSON inspection; [Apple IPS](../apple-ips.md)                                                                       |
+| Linux kernel modules                   | .modinfo keys, __versions CRCs, this_module presence, and signature trailer                                                 | Built-in static ELF inspection; [kernel modules](../kernel-modules.md)                                                              |
 | Erlang BEAM                            | IFF chunks, atoms, exports, and tables                                                                                      | Built-in static BEAM inspection; [Erlang BEAM](../erlang-beam.md)                                                                   |
 | Αρχείο WASM                            | Έλεγχο εγκυρότητας, ενότητες, ακριβείς μορφές εισαγωγών/εξαγωγών σε WAT και αποκωδικοποιημένο WAT                           | WABT 1.0.42 που παρέχει ο χρήστης· `inspect_wasm_artifact`                                                                          |
 | Bytecode EVM                           | Selectors επιλογής συνάρτησης, μετατοπίσεις σε bytes, εκτιμώμενα ορίσματα και δυνατότητα μεταβολής της κατάστασης           | Τοπική είσοδος σε ακατέργαστα bytes ή δεκαεξαδική μορφή σε Linux x64· [οδηγός EVM χωρίς εκτέλεση](../evm-bytecode.md)               |
@@ -225,7 +227,50 @@ npx rea-agents@latest setup
 
 [Διάβασε τη μελέτη περίπτωσης](https://rea.tools/showcase/th04/) · [Αποθετήριο ανακατασκευής](https://github.com/N0zoM1z0/th04)
 
+### Δημιουργία περιβαλλόντων RL με το REA
+
+Καταγράψτε μια συνεδρία εφαρμογής ιστού, μετατρέψτε το API της σε εργαλεία και εξαγάγετε ένα περιβάλλον για πράκτορα AI. Εκτελέστε το με το AgentEnv και προσθέστε εργασίες και ελέγχους ανταμοιβής για εκπαίδευση RL ή αξιολόγηση.
+
+[Οδηγός δημιουργίας περιβάλλοντος](https://rea.tools/guides/rl-environments/) ·
+[Δείτε το demo στο X](https://x.com/reatools/status/2112574822584918075?s=20)
+
 Αν χρησιμοποίησες το REA για κάτι ενδιαφέρον, θα θέλαμε να το δούμε. Μοιράσου τη μελέτη σου σε ένα [issue](https://github.com/morluto/rea/issues) ή [pull request](https://github.com/morluto/rea/pulls), αναφέροντας τον στόχο, το ερώτημά σου, πώς βοήθησε το REA και τι ανακάλυψες.
+
+<a id="build-rl-environments"></a>
+
+## Δημιουργία περιβαλλόντων RL
+
+Δημιουργήστε ένα τοπικό περιβάλλον όπου ένας πράκτορας AI εξασκείται σε εργασίες όπως η εύρεση ενός issue ή η δημιουργία φακέλου, χωρίς να εκτελείται η αρχική εφαρμογή. Χρησιμοποιήστε το για ενισχυτική μάθηση (RL) ή για να ελέγξετε πόσο καλά ολοκληρώνει εργασίες ο πράκτορας.
+
+Το REA μετατρέπει καταγεγραμμένα αιτήματα και απαντήσεις API σε εργαλεία που μπορεί να καλεί ο πράκτορας. Το περιβάλλον χρησιμοποιεί τα καταγεγραμμένα δεδομένα και υποστηρίζει αλλαγές μόνο όταν η καταγραφή επιβεβαιώνει τα αποτελέσματά τους.
+
+Ρυθμίστε το REA στον πράκτορά σας και προσαρμόστε το URL και τις εργασίες φακέλων του παραδείγματος:
+
+```text
+Χρησιμοποίησε το REA για να δημιουργήσεις περιβάλλον RL από τη δοκιμαστική εφαρμογή μου:
+http://127.0.0.1:3000
+Κάλυψε προβολή, δημιουργία, μετονομασία και διαγραφή φακέλων. Μπορείς να δημιουργείς
+και να αφαιρείς δοκιμαστικούς φακέλους, αλλά μην αλλάξεις τα υπάρχοντα δεδομένα.
+Αποθήκευσέ το σε φάκελο my-env, έλεγξε τις διαθέσιμες λειτουργίες και πες μου πώς εκτελείται.
+```
+
+<details>
+<summary>Χρήση της γραμμής εντολών</summary>
+
+Χρησιμοποιήστε αυτές τις εντολές αν έχετε ήδη αρχείο με τα καταγεγραμμένα αιτήματα και τις απαντήσεις της εφαρμογής στο πρόγραμμα περιήγησης. Η εκτέλεση χρειάζεται επίσης AgentEnv και Docker.
+
+```sh
+rea environment-build ./session.har ./my-env --name my-env --json
+agent-env run ./my-env
+```
+
+</details>
+
+Το REA εξάγει ένα εκτελέσιμο περιβάλλον με μια βασική δοκιμή εκκίνησης και απόκρισης. Συνδέστε το στο πλαίσιο RL για να ορίσετε στόχους, να προσθέσετε ελέγχους ανταμοιβής και να εκτελέσετε εκπαίδευση.
+
+[Οδηγός δημιουργίας περιβάλλοντος](https://rea.tools/guides/rl-environments/) ·
+[Αναφορά περιβαλλόντων](../agent-environments.md) ·
+[Δείτε το demo στο X](https://x.com/reatools/status/2112574822584918075?s=20)
 
 ## Συχνές ερωτήσεις
 

@@ -7,7 +7,6 @@ import { createArtifactInspection } from "../../../src/domain/artifactInspection
 import { compareArtifacts } from "../../../src/domain/artifactComparison.js";
 import { parseArtifactInventoryEvidence } from "../../../src/domain/artifactInventoryEvidence.js";
 import { createEvidence } from "../../../src/domain/evidence.js";
-import { jsonValueSchema } from "../../../src/domain/jsonValue.js";
 import { fragmentInventoryEvidence } from "../../fixtures/artifactEvidence.js";
 import { inventoryArtifact } from "../../fixtures/artifactInventory.js";
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
@@ -35,7 +34,7 @@ it("merges every inventory substep from inspect_artifact Evidence", async () => 
     {
       operation: "inventory_artifact",
       parameters: {},
-      result: jsonValueSchema.parse(inventory),
+      result: inventory,
       confidence: "observed",
       authority: "shipped-artifact",
     },
@@ -57,13 +56,13 @@ it("merges every inventory substep from inspect_artifact Evidence", async () => 
     {
       operation: "inspect_artifact",
       parameters: {},
-      result: jsonValueSchema.parse({
+      result: {
         ...inspection,
         substeps: [
           firstSubstep,
           {
             ...firstSubstep,
-            // Only uniqueness and schema shape matter here; the parser under test
+            // This synthetic ID satisfies the schema; the parser under test
             // joins retained Evidence by evidence_id rather than substep_id content.
             substep_id: `ais_${"0".repeat(64)}`,
             evidence_id: second.evidence_id,
@@ -75,7 +74,7 @@ it("merges every inventory substep from inspect_artifact Evidence", async () => 
           substeps_completed: 2,
         },
         evidence_links: [first.evidence_id, second.evidence_id],
-      }),
+      },
       confidence: "derived",
       authority: "shipped-artifact",
     },

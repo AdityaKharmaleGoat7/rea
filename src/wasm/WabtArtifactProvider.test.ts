@@ -327,7 +327,9 @@ it.each([
       expect(report.tool_profile.commands[0]?.arguments).toContain(
         "--ignore-custom-section-errors",
       );
-      expect(await readFile(fixture.path)).toEqual(fixture.bytes);
+      expect(Buffer.compare(await readFile(fixture.path), fixture.bytes)).toBe(
+        0,
+      );
       expect(report.headers).toBe(
         dump.slice(0, dump.indexOf("Section Details:\n")),
       );
@@ -434,6 +436,29 @@ it("returns actionable unavailable without creating a workspace when tools are a
       userMessage: expect.stringContaining("REA_WABT_BIN_DIRECTORY"),
     },
   });
+});
+
+it("preserves a pre-aborted caller reason without acquiring WASM facts", async () => {
+  const reason = { source: "caller cancelled before provider admission" };
+  const controller = new AbortController();
+  controller.abort(reason);
+  const createRuntime = vi.fn(() => {
+    throw new Error("Pre-aborted inspection must not create a workspace");
+  });
+  const provider = new WabtArtifactProvider({}, undefined, createRuntime);
+  try {
+    const result = await provider.inspect(
+      { path: "/not-read.wasm", glue_paths: [], candidate_paths: [] },
+      { signal: controller.signal },
+    );
+    if (result.ok) throw new Error("Expected cancellation");
+    expect(result.error._tag).toBe("AnalysisCancelledError");
+    expect(result.error.cause).toBe(reason);
+    expect(result.error.partialObservation).toBeUndefined();
+    expect(createRuntime).not.toHaveBeenCalled();
+  } finally {
+    await provider.close();
+  }
 });
 
 it.each([
@@ -559,6 +584,21 @@ it("retries a retained input descriptor before admitting the next WABT operation
         cleanupIncomplete: true,
         cleanupResources: [path],
         cause: { message: "injected WABT input close failure" },
+        partialObservation: {
+          normalized_result: {
+            artifact: {
+              path,
+              sha256: createHash("sha256")
+                .update(Buffer.alloc(76, 1))
+                .digest("hex"),
+              bytes: 76,
+            },
+            candidates: [{ path }],
+            glue: [],
+            validation: "unknown",
+            tool_profile: { release: "1.0.42" },
+          },
+        },
       },
     });
     expect(fileCloseFailure.attempts).toBe(1);
@@ -684,7 +724,12 @@ const launchWabtOutcome = async (
   const { bytes, dump, controller } = fixture;
   const version = input.arguments[0] === "--version";
   if (!version) {
-    expect(await readFile(join(input.cwd ?? "", "module.wasm"))).toEqual(bytes);
+    expect(
+      Buffer.compare(
+        await readFile(join(input.cwd ?? "", "module.wasm")),
+        bytes,
+      ),
+    ).toBe(0);
     if (mode === "changed-snapshot") {
       const snapshot = join(input.cwd ?? "", "module.wasm");
       await chmod(snapshot, 0o600);
@@ -783,7 +828,7 @@ it("enforces a selected command deadline and completes a corrected retry after c
   const report = wasmArtifactSchema.parse(corrected.value.result);
   expect(report.tool_profile.timeout_ms).toBe(2_000);
   expect(report.limitations.join(" ")).not.toContain("30-second");
-  await expect(readFile(fixture.path)).resolves.toEqual(fixture.bytes);
+  expect(Buffer.compare(await readFile(fixture.path), fixture.bytes)).toBe(0);
 });
 
 const glueSourcesForOutcome = (mode: OutcomeMode) => {
@@ -968,7 +1013,7 @@ const runOwnedArtifactOutcome = async (
     );
   await assertSnapshotCleanupOutcome(mode, result, provider, runtimePath);
   await expect(access(runtimePath)).rejects.toMatchObject({ code: "ENOENT" });
-  expect(await readFile(path)).toEqual(bytes);
+  expect(Buffer.compare(await readFile(path), bytes)).toBe(0);
   if (acquiredPid !== undefined) {
     const pid = acquiredPid;
     expect(() => process.kill(pid, 0)).toThrow();
@@ -978,6 +1023,153 @@ const runOwnedArtifactOutcome = async (
 it.each(outcomeModes)(
   "owns private artifact bytes and retains %s outcome",
   (mode) => runOwnedArtifactOutcome(mode),
+);
+
+it.each([
+  {
+    stage: "validation rejection",
+    mode: "invalid",
+    validation: "rejected-by-selected-profile",
+  },
+  { stage: "candidate admission", mode: "success", validation: "unknown" },
+  { stage: "glue decoding", mode: "success", validation: "unknown" },
+  { stage: "glue finalization", mode: "success", validation: "unknown" },
+  { stage: "producer output", mode: "malformed-wat", validation: "valid" },
+] as const)(
+  "retains acquired file facts after $stage without claiming more module coverage",
+  async ({ stage, mode, validation }) => {
+    // Owned Node commands supply WABT-shaped responses; this checks provider
+    // Evidence retention, not real WABT acceptance of the fixture bytes.
+    const fixture = await createWabtArtifactFixture();
+    const candidate = join(fixture.selectedRoot, "candidate.wasm");
+    const candidateBytes = Buffer.from("independent candidate bytes");
+    await writeFile(candidate, candidateBytes);
+    const missing = join(fixture.selectedRoot, "missing.wasm");
+    const gluePath = join(fixture.selectedRoot, "glue.js");
+    const glueSource = 'fetch("./selected.wasm");';
+    const glueBytes =
+      stage === "glue decoding" ? Buffer.from([0xff]) : Buffer.from(glueSource);
+    await writeFile(gluePath, glueBytes);
+    const provider = new WabtArtifactProvider(
+      { REA_WABT_BIN_DIRECTORY: fixture.selectedRoot },
+      (input) =>
+        launchWabtOutcome(input, mode, {
+          ...fixture,
+          controller: new AbortController(),
+        }),
+    );
+    if (stage === "glue finalization") {
+      fileCloseFailure.selectedPath = gluePath;
+      fileCloseFailure.attempts = 0;
+      fileCloseFailure.failFirst = true;
+    }
+    try {
+      const result = await provider.inspect(
+        {
+          path: fixture.path,
+          candidate_paths:
+            stage === "candidate admission"
+              ? [candidate, missing]
+              : [candidate],
+          glue_paths: stage === "candidate admission" ? [] : [gluePath],
+        },
+        { commandTimeoutMs: 42000 },
+      );
+      if (!result.ok) {
+        expect(result.error.partialObservation).toMatchObject({
+          parameters: expect.not.objectContaining({
+            command_timeout_ms: expect.anything(),
+          }),
+          normalized_result: { tool_profile: { timeout_ms: 42000 } },
+        });
+      }
+      if (result.ok) throw new Error("Expected the selected failure stage");
+      expect(result.error._tag).toBe(
+        validation === "rejected-by-selected-profile"
+          ? "AnalysisInputError"
+          : validation === "unknown"
+            ? "AnalysisInputError"
+            : "AnalysisOutputError",
+      );
+      expect(result.error.partialObservation).toMatchObject({
+        normalized_result: {
+          artifact: {
+            path: fixture.path,
+            sha256: createHash("sha256").update(fixture.bytes).digest("hex"),
+          },
+          validation,
+          tool_profile: { release: "1.0.42" },
+          candidates: [
+            { path: fixture.path },
+            {
+              path: candidate,
+              sha256: createHash("sha256").update(candidateBytes).digest("hex"),
+            },
+          ],
+          glue:
+            stage === "candidate admission"
+              ? []
+              : [
+                  {
+                    artifact: {
+                      path: gluePath,
+                      sha256: createHash("sha256")
+                        .update(glueBytes)
+                        .digest("hex"),
+                    },
+                    parse_status:
+                      stage === "glue finalization"
+                        ? "not-performed"
+                        : stage === "glue decoding"
+                          ? "failed"
+                          : "complete",
+                    references:
+                      stage === "glue decoding" || stage === "glue finalization"
+                        ? []
+                        : [
+                            {
+                              value: "./selected.wasm",
+                              candidate_paths: [fixture.path],
+                            },
+                          ],
+                  },
+                ],
+        },
+      });
+      if (validation === "rejected-by-selected-profile")
+        expect(result.error.partialObservation).toMatchObject({
+          normalized_result: {
+            exit_code: 1,
+            stderr: "module.wasm: invalid bytes\n",
+          },
+        });
+      if (validation === "unknown")
+        expect(result.error).toMatchObject({
+          issues: [
+            {
+              path:
+                stage === "candidate admission"
+                  ? ["candidate_paths", 1]
+                  : ["glue_paths", 0],
+            },
+          ],
+        });
+      if (stage === "glue finalization") {
+        expect(result.error).toMatchObject({
+          cleanupIncomplete: true,
+          cleanupResources: [gluePath],
+        });
+        expect(fileCloseFailure.attempts).toBe(1);
+        await provider.close();
+        expect(fileCloseFailure.attempts).toBe(2);
+        expect(result.error.cleanupIncomplete).toBe(false);
+      }
+    } finally {
+      await provider.close();
+      fileCloseFailure.selectedPath = "";
+      fileCloseFailure.failFirst = false;
+    }
+  },
 );
 it.each([null, { reason: "caller-owned object" }, undefined])(
   "preserves finalization abort reason %j through cleanup recovery",

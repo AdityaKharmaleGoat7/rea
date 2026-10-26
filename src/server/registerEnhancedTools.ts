@@ -1,4 +1,4 @@
-import type { ToolResultDelivery } from "./toolResult.js";
+import type { ToolResultDelivery } from "./ToolResultDelivery.js";
 import type { EvidenceMcpServer } from "./EvidenceMcpServer.js";
 import type {
   EvidenceWriter,
@@ -25,6 +25,7 @@ import { toolContract } from "../contracts/toolContracts.js";
 import type { ToolContract } from "../contracts/toolContractTypes.js";
 import type { AnalysisProfileCommitment } from "../domain/analysisProfile.js";
 import type { BinaryTarget } from "../domain/binaryTargetTypes.js";
+import { ok } from "../domain/result.js";
 import type { JsonValue } from "../domain/jsonValue.js";
 import type { Logger } from "pino";
 import { mcpProgressReporter } from "./mcpProgress.js";
@@ -146,10 +147,11 @@ export const registerEnhancedTools = (
   server.registerTool(
     callGraph.name,
     toolRegistrationOptions(callGraph),
-    (input, context) =>
+    ({ detail, ...input }, context) =>
       executeEnhancedTool(registration, callGraph, {
         validatedCall: { name: "get_call_graph", input },
         context,
+        detail,
       }),
   );
   server.registerTool(
@@ -233,10 +235,19 @@ const executeEnhancedTool = async (
   },
   contract: ToolContract,
   request: {
+    readonly detail?: "complete" | "summary";
     readonly validatedCall: ValidatedEnhancedCall;
     readonly context: ServerContext;
   },
 ): Promise<CallToolResult> => {
+  if (request.detail === "summary") {
+    const ready = requireAnalysisViewRetention(request.validatedCall.name, {
+      recordEvidence: registration.recordEvidence,
+      evidenceById: registration.evidenceById,
+    });
+    if (!ready.ok)
+      return registration.delivery.toCallToolResult(ready, contract);
+  }
   const admitted = await registration.withAdmittedAnalysis(
     request.validatedCall.name,
     request.context.mcpReq.signal,
@@ -275,6 +286,9 @@ const executeEnhancedTool = async (
           result: result.value.result,
           upstreamProfile: registration.analysisProfile?.(name),
           upstreamLimitations: result.value.limitations,
+          ...(result.value.evidenceLinks === undefined
+            ? {}
+            : { upstreamEvidenceLinks: result.value.evidenceLinks }),
         });
         const recorded = registration.recordEvidence?.(evidence);
         if (recorded !== undefined && !recorded.ok)
@@ -304,10 +318,21 @@ const executeEnhancedTool = async (
         });
         if (!unknowns.ok)
           return registration.delivery.toCallToolResult(unknowns, contract);
+        const delivered =
+          request.detail === "summary"
+            ? summarizeRetainedAnalysis(evidence, {
+                recordEvidence: registration.recordEvidence,
+                evidenceById: registration.evidenceById,
+              })
+            : ok(evidence);
+        if (!delivered.ok)
+          return registration.delivery.toCallToolResult(delivered, contract);
         return registration.delivery.toEvidenceToolResult(
-          evidence,
+          delivered.value,
           contract,
-          recorded,
+          request.detail === "summary"
+            ? registration.recordEvidence?.(delivered.value)
+            : recorded,
         );
       }
       return registration.delivery.toCallToolResult(result, contract);

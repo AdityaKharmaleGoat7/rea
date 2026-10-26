@@ -1,5 +1,6 @@
 import type { ListQuery } from "./environmentStateListQuery.js";
 import { canonicalJson } from "../comparisonSemantics.js";
+import { compareUnicodeCodePoints } from "../unicodeCodePointOrder.js";
 import type { JsonValue } from "../jsonValue.js";
 import type { StateWritePlan } from "./environmentStateWriteRules.js";
 import {
@@ -7,6 +8,7 @@ import {
   type ClockFormat,
 } from "./environmentStateWriteValues.js";
 import { ENTRY_BYTES, textBytes } from "./webNetworkRouteTemplates.js";
+import { counterAt, withCounter } from "./environmentStateCounters.js";
 
 /** How records are ordered: by recorded start time, or by record order when any start time is missing. */
 export type StateTimeline = "recorded-start-time" | "record-order";
@@ -36,14 +38,25 @@ export type ParsedBody =
   | { readonly kind: "json"; readonly value: JsonValue }
   | { readonly kind: "unusable" };
 
+/** A request distinguishes confirmed absence from content the state cannot interpret. */
+export type ParsedRequestBody = ParsedBody | { readonly kind: "absent" };
+
+export const requestJson = (body: ParsedRequestBody): JsonValue | undefined =>
+  body.kind === "json" ? body.value : undefined;
+
 /** Budgeted access the accumulator lends extraction; null and false mean the budget is exhausted. */
 export interface StateBudget {
   readonly body: (ordinal: number) => ParsedBody | null;
-  /** A record's request body, admitted as response bodies are. */
-  readonly requestBody: (ordinal: number) => ParsedBody | null;
+  /** Keep the request's parsing reservation until its consumer finishes. */
+  readonly withRequestBody: <T>(
+    ordinal: number,
+    use: (body: ParsedRequestBody) => T,
+  ) => T | null;
   /** Whether a record's response had no body. */
   readonly emptyResponse: (ordinal: number) => boolean;
   readonly retain: (bytes: number) => boolean;
+  /** Mark the retained bytes; the returned call releases what was retained since, once none of it is held. */
+  readonly checkpoint: () => () => void;
   /** Drop the temporary work of the body just read. */
   readonly release: () => void;
 }
@@ -105,14 +118,34 @@ interface EntityViewPlan {
   readonly checked_record_ordinals: number[];
   /** How the view spells the clock fields it always spells otherwise than the entities' stored values. */
   readonly clock_formats?: Readonly<Record<string, ClockFormat>> | undefined;
+  /** Fields whose string arrays the view lists in code-point order, whatever order they were written in. */
+  readonly sorted_arrays?: string[] | undefined;
+  /** The keys the view shows of object fields it shows with fewer keys than stored. */
+  readonly nested_fields?: Readonly<Record<string, string[]>> | undefined;
+  /** Envelope members each response there mints, which checks leave out and serving keeps as recorded. */
+  readonly per_response_members?: string[] | undefined;
 }
 
-export type StateItemView = EntityViewPlan & {
-  readonly shape: "item";
-  readonly envelope_ordinal: number;
-  /** Recorded reads that asked for some fields only and did not return the item, which replay answers. */
+/** A query key that picks out replayed reads: a parameter, a parameter with one value, or a parameter left out. */
+export interface ReplayKey {
+  readonly name: string;
+  readonly value?: string | undefined;
+  readonly absent?: true | undefined;
+}
+
+/** Recorded reads a view leaves to replay, and the query keys that pick calls of them out. */
+interface ReplayedReads {
+  /** Reads that asked for some fields only, or show entities in another representation than the checked lines. */
   readonly projected_record_ordinals?: number[] | undefined;
-};
+  /** A call whose query matches one of these replays, a field selection by its values; absent on views that only left out projections. */
+  readonly projected_query_keys?: ReplayKey[] | undefined;
+}
+
+export type StateItemView = EntityViewPlan &
+  ReplayedReads & {
+    readonly shape: "item";
+    readonly envelope_ordinal: number;
+  };
 
 /** A query parameter that asks for some fields only (`fields`, `fields[...]`, `select`, `$select`). */
 export const isProjectionParameter = (name: string): boolean => {
@@ -130,15 +163,23 @@ export const projectsFields = (query: string | undefined): boolean =>
   query !== undefined &&
   [...new URLSearchParams(query).keys()].some(isProjectionParameter);
 
-export type StateListView = EntityViewPlan & {
-  readonly shape: "list";
-  readonly membership: "all" | "recorded";
-  /** With recorded membership, the checked lines that each list their whole collection. */
-  readonly all_record_ordinals?: number[] | undefined;
-  readonly counters: string[];
-  /** The query the view's other lines follow, when one explains any of them. */
-  readonly query?: ListQuery | undefined;
-};
+/** Whether a recorded query asks for some fields only: a projection parameter with a value other than `*`, which asks for all. */
+export const selectsSomeFields = (query: string | undefined): boolean =>
+  query !== undefined &&
+  [...new URLSearchParams(query)].some(
+    ([name, value]) => isProjectionParameter(name) && value !== "*",
+  );
+
+export type StateListView = EntityViewPlan &
+  ReplayedReads & {
+    readonly shape: "list";
+    readonly membership: "all" | "recorded";
+    /** With recorded membership, the checked lines that each list their whole collection. */
+    readonly all_record_ordinals?: number[] | undefined;
+    readonly counters: string[];
+    /** The query the view's other lines follow, when one explains any of them. */
+    readonly query?: ListQuery | undefined;
+  };
 
 /** Whether a list view answers on a checked line with every entity of the collection. */
 export const listsAll = (view: StateListView, ordinal: number): boolean =>
@@ -158,6 +199,7 @@ export type StateView =
       readonly tool: string;
       readonly shape: "document";
       readonly checked_record_ordinals: number[];
+      readonly per_response_members?: string[] | undefined;
     }
   | {
       readonly tool: string;
@@ -177,7 +219,7 @@ export interface ExtractedState {
 
 const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 /** A POST whose path names one of these segments queries state rather than changing it. */
-const QUERY_SEGMENTS = new Set([
+export const QUERY_SEGMENTS = new Set([
   "search",
   "query",
   "list",
@@ -618,7 +660,10 @@ export const formatItemCount = (
 /** One entity as a view shows it: the view's fields it has, view-specific values first; volatile fields take `observed` values when given. */
 export const renderStateEntity = (
   entity: StateEntity,
-  view: Pick<EntityViewPlan, "tool" | "fields" | "clock_formats">,
+  view: Pick<
+    EntityViewPlan,
+    "tool" | "fields" | "clock_formats" | "sorted_arrays" | "nested_fields"
+  >,
   volatileFields: ReadonlySet<string>,
   observed?: JsonObject,
 ): JsonObject => {
@@ -626,6 +671,8 @@ export const renderStateEntity = (
     entity.view_fields.find((candidate) => candidate.tool === view.tool)
       ?.fields ?? {};
   const formats = view.clock_formats ?? {};
+  const nested = view.nested_fields ?? {};
+  const sorted = new Set(view.sorted_arrays);
   return Object.fromEntries(
     view.fields.flatMap((name): [string, JsonValue][] => {
       const source =
@@ -635,18 +682,37 @@ export const renderStateEntity = (
             ? own
             : entity.fields;
       if (!Object.hasOwn(source, name)) return [];
-      // A stored value the view never recorded, such as a written one, takes the view's spelling.
-      return [
-        [
-          name,
-          source === entity.fields && Object.hasOwn(formats, name)
+      // A stored value the view never recorded, such as a written one, takes the view's spelling and keys.
+      const value =
+        source !== entity.fields
+          ? source[name]!
+          : Object.hasOwn(formats, name)
             ? respellClock(source[name]!, formats[name]!)
-            : source[name]!,
-        ],
-      ];
+            : Object.hasOwn(nested, name)
+              ? shownKeys(source[name]!, nested[name]!)
+              : source[name]!;
+      return [[name, sorted.has(name) ? inSetOrder(value) : value]];
     }),
   );
 };
+
+/** An object with only the keys a view shows of it, in the view's order; any other value as it is. */
+const shownKeys = (value: JsonValue, keys: readonly string[]): JsonValue =>
+  isObject(value)
+    ? Object.fromEntries(
+        keys.flatMap((key) =>
+          Object.hasOwn(value, key) ? [[key, value[key]!]] : [],
+        ),
+      )
+    : value;
+
+/** Whether a value is an array of strings. */
+export const isStringArray = (value: JsonValue): value is string[] =>
+  Array.isArray(value) && value.every((item) => typeof item === "string");
+
+/** A string array in code-point order, as a view that keeps the field as a set lists it; any other value as it is. */
+const inSetOrder = (value: JsonValue): JsonValue =>
+  isStringArray(value) ? value.toSorted(compareUnicodeCodePoints) : value;
 
 /** The fields every recording of a view carried that the entity, as serving renders it, lacks; serving refuses to answer with such an entity. */
 export const missingRequiredFields = (
@@ -670,11 +736,10 @@ export const renderStateList = (
   const listed = listItems(base, view.pointer)?.length;
   return view.counters.reduce(
     (body, name) => {
-      const observed = at(base, pointerTo(name));
+      const observed = counterAt(base, name);
       if (listed === undefined || recordedItemCount(observed) !== listed)
         return body;
-      const count = formatItemCount(items.length, observed!);
-      return replaceAt(body, pointerTo(name), count);
+      return withCounter(body, name, formatItemCount(items.length, observed!));
     },
     replaceAt(base, view.pointer, [...items]),
   );

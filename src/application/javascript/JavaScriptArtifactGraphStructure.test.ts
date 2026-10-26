@@ -6,7 +6,7 @@ import type { JavaScriptArtifactFile } from "../../domain/javascript/javascriptA
 import { analyzeJavaScriptStaticSource } from "../../domain/javascript/javascriptStaticAnalysis.js";
 import type {
   AnalyzedJavaScriptArtifactFile,
-  JavaScriptModuleArtifactAnalysis,
+  JavaScriptArtifactAnalysis,
 } from "./JavaScriptArtifactAnalysisTypes.js";
 import { javascriptArtifactAnalysisScopes } from "./JavaScriptArtifactAnalysisTypes.js";
 import { JavaScriptArtifactGraphAccumulator } from "./JavaScriptArtifactGraphAccumulator.js";
@@ -51,7 +51,7 @@ const skippedEntry = (
 
 const analysisFor = (
   entries: readonly AnalyzedJavaScriptArtifactFile[],
-): JavaScriptModuleArtifactAnalysis => ({
+): JavaScriptArtifactAnalysis => ({
   jsonDocuments: new JavaScriptJsonDocuments(),
   files: entries,
   packages: [],
@@ -68,7 +68,7 @@ const analysisFor = (
 
 const contextFor = (
   file: JavaScriptArtifactFile,
-  analysis: JavaScriptModuleArtifactAnalysis,
+  analysis: JavaScriptArtifactAnalysis,
 ): JavaScriptArtifactGraphContext => {
   const accumulator = new JavaScriptArtifactGraphAccumulator();
   const snapshot = {
@@ -130,6 +130,11 @@ describe("skipped JavaScript parse reporting", () => {
     const context = contextFor(file, analysisFor([skippedEntry(file)]));
     addJavaScriptArtifactFiles(context);
     expect(fileObservation(context).parse_status).toBe("skipped");
+    expect(fileObservation(context).analysis_coverage).toMatchObject({
+      syntax: { status: "not-examined", error_count: null },
+      semantics: { unknown_findings: null },
+      examination: { status: "not-examined" },
+    });
   });
 
   it("keeps parse_status null for a JavaScript file never attempted", () => {
@@ -157,6 +162,21 @@ describe("skipped JavaScript parse reporting", () => {
     const context = contextFor(file, analysisFor([entry]));
     addJavaScriptArtifactFiles(context);
     expect(fileObservation(context).parse_status).toBe(javascript.parse_status);
+    expect(fileObservation(context).analysis_coverage).toEqual(
+      javascript.analysis_coverage,
+    );
+  });
+
+  it("does not reconstruct coverage from a historical overall summary", () => {
+    const file = skippedFile();
+    const { analysis_coverage: _coverage, ...javascript } =
+      analyzeJavaScriptStaticSource(file.text.included ? file.text.value : "");
+    const context = contextFor(
+      file,
+      analysisFor([{ file, javascript, semantic: null }]),
+    );
+    addJavaScriptArtifactFiles(context);
+    expect(fileObservation(context)).not.toHaveProperty("analysis_coverage");
   });
 });
 

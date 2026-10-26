@@ -448,8 +448,10 @@ uncertainty rather than pretending to execute later writes. References
 handed back by local functions, methods, constructors, async functions, and
 generators also retain escape uncertainty, including when the call is read-only;
 this does not establish that a mutation occurred. Aliases
-and shared children in spread and rest copies retain that uncertainty; copied
-primitive slots and unrelated containing properties remain known. Object rest
+and shared children in spread and rest copies retain that uncertainty. Exposing
+the copy alone does not invalidate copied primitive slots or unrelated containing
+properties. Dynamic child writes such as `copy[key].value = 2` remain conservative
+about which original slot was selected. Object rest
 excludes consumed keys, array rest excludes the consumed prefix for known
 arrays, and later explicit data properties and methods replace earlier object
 spread references. A known array prefix does not expose values from a following
@@ -466,6 +468,11 @@ Receiver projections follow known data fields initialized from `this` or earlier
 self-referencing fields; static fields retain their declaring class identity.
 An alias cycle that repeatedly selects deeper children retains escape uncertainty
 at its recovered roots rather than claiming a fixed number of loop iterations.
+Equivalent member reads in a repeating loop share unknown ordering instead of
+creating a distinct capture for every branch history. Straight-line captures and
+once-only loop inputs retain their own selection sites. When unobserved suffixes
+are widened, their exact observed prefixes stay separate so unrelated siblings
+remain known.
 
 Writes through an object getter's returned receiver retain that uncertainty
 when the object is an array element, nested inside mixed object/array
@@ -510,8 +517,13 @@ escape uncertainty. External prototype changes and unsupported runtime protocols
 remain unknown rather than supplying exact post-invocation values.
 Identifier references and closure captures share Babel syntax-role facts plus
 explicit binding/write roles; noncomputed declaration keys and import/meta names
-are not lexical reads. Provenance-only expression-depth omissions enter the same typed source coverage
-as value-evaluation bounds and remain visible in retained application Evidence.
+are not lexical reads. TypeScript type positions, including `typeof` type queries
+and computed keys in erased signatures, do not evaluate JavaScript bindings or
+create runtime calls or captures. Decorators on declared class fields can still
+run when the class is defined, and a decorated declared or abstract field can
+evaluate its computed key. Provenance-only expression-depth omissions enter
+the same typed source coverage as value-evaluation bounds and remain visible in
+retained application Evidence.
 Immediate synchronous function results also share the loader reference owner.
 An expression arrow returning the retained CommonJS `require` can preserve that
 loader identity. Possible loader results with opaque alternatives or block

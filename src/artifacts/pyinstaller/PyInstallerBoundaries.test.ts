@@ -656,7 +656,9 @@ for (const cancel of [false, true]) {
           } else {
             expect(result.ok).toBe(true);
             if (!result.ok) throw result.cause;
-            expect(result.value.subarray(16)).toEqual(Buffer.from("body"));
+            expect(
+              Buffer.compare(result.value.subarray(16), Buffer.from("body")),
+            ).toBe(0);
           }
           await reader.close();
           expect(attempts).toBe(failClose ? 2 : 1);
@@ -744,18 +746,20 @@ it.each([false, true])(
           release = deferred();
         const handles = new Set<FileHandle>();
         const stat = borrowed.stat;
+        const prototype: Pick<FileHandle, "stat"> =
+          Object.getPrototypeOf(borrowed);
         const spy = vi
-          .spyOn(Object.getPrototypeOf(borrowed), "stat")
+          .spyOn(prototype, "stat")
           .mockImplementation(async function (
             this: FileHandle,
-            ...args: unknown[]
+            ...args: Parameters<FileHandle["stat"]>
           ) {
             if (this !== borrowed) {
               handles.add(this);
               entered.resolve();
               await release.promise;
             }
-            return Reflect.apply(stat, this, args);
+            return stat.call(this, ...args);
           });
         const caller = new AbortController(),
           reason = new Error("one admission waiter leaves");

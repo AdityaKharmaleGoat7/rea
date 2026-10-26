@@ -1,7 +1,7 @@
 <div align="center">
 
 [English](../../README.md) · [简体中文](README_zh.md) · [繁體中文](README_zh-TW.md) · [日本語](README_ja.md) · [한국어](README_ko.md) · [Türkçe](README_tr.md) · [Русский](README_ru.md) · [Tiếng Việt](README_vi.md) · [ไทย](README_th.md) · [Deutsch](README_de.md) · [Español](README_es.md) · [Français](README_fr.md) · **Українська** · [Polski](README_pl.md) · [Português (Brasil)](README_pt-BR.md) · [العربية](README_ar.md) · [فارسی](README_fa.md) · [Bahasa Indonesia](README_id.md) · [Italiano](README_it.md)
-· [Ελληνικά](README_el.md) · [മലയാളം](README_ml.md) · [Roman Urdu](README_ur-Latn.md)
+· [Ελληνικά](README_el.md) · [മലയാളം](README_ml.md) · [Roman Urdu](README_ur-Latn.md) · [Română](README_ro.md)
 
 # REA: Реверс-інжиніринг будь-чого
 
@@ -20,7 +20,7 @@
 
 **[Сайт](https://rea.tools/uk/) · [Посібники](https://rea.tools/uk/guides/) · [Приклади](https://rea.tools/uk/showcase/)**
 
-[Швидкий старт](#швидкий-старт) · [Як працює REA](#як-працює-rea) · [Що можна аналізувати](#що-можна-аналізувати) · [Приклади](#приклади) · [Поширені запитання](#поширені-запитання) · [Інструменти GNU objdump і Rizin](../reverse-engineering-tools.md) · [Документація](#документація)
+[Швидкий старт](#швидкий-старт) · [Як працює REA](#як-працює-rea) · [Що можна аналізувати](#що-можна-аналізувати) · [Приклади](#приклади) · [Створення RL-середовищ](#build-rl-environments) · [Поширені запитання](#поширені-запитання) · [Інструменти GNU objdump і Rizin](../reverse-engineering-tools.md) · [Документація](#документація)
 
 <code>npx rea-agents setup</code>
 
@@ -158,7 +158,9 @@ REA потребує Node.js 22.x (>=22.23.4), 24.x (>=24.22.1) або 26+ (>=26
 | Байт-код EVM                         | Селектори диспетчеризації, зміщення байтів, виведені припущення про аргументи та змінюваність стану               | Локальні необроблені байти або шістнадцяткове представлення у Linux x64; [посібник EVM без запуску](../evm-bytecode.md)                               |
 | Rust binaries                        | Embedded cargo-auditable dependency list                                                                          | [Rust binaries](../rust-binaries.md)                                                                                                                  |
 | ELF notes                            | PT_NOTE/SHT_NOTE owners, types, GNU build-id and ABI-tag fields                                                   | Built-in static ELF inspection; [ELF notes](../elf-notes.md)                                                                                          |
+| Linux kernel modules                 | .modinfo keys, __versions CRCs, this_module presence, and signature trailer                                       | Built-in static ELF inspection; [kernel modules](../kernel-modules.md)                                                                                |
 | Erlang BEAM                          | IFF chunks, atoms, exports, and tables                                                                            | Built-in static BEAM inspection; [Erlang BEAM](../erlang-beam.md)                                                                                     |
+| Apple IPS crashes                    | .ips metadata, threads, images, registers and crash classes                                                       | Built-in static JSON inspection; [Apple IPS](../apple-ips.md)                                                                                         |
 | Записані аварійні завершення в Linux | Необроблені записи note, регістри/сигнали кожного записаного потоку й необов'язкові кандидати зіставлення пам'яті | pwntools, наданий стороною, що викликає інструмент, у Linux x64; необов'язкові GDB/pwndbg; [записані аварійні завершення](../recorded-crashes.md)     |
 | Встановлені настільні програми       | Можливі середовища виконання, файли доказів, компоненти та наступні кроки                                         | Обмежена перевірка каталогів і заголовків；[Настільні програми](../desktop-applications.md)                                                           |
 | JavaScript / Electron                | Модулі, імпорти, карти вихідного коду, маршрути, IPC і зв'язки з нативними доповненнями                           | Node.js і npm; [аналіз застосунків](../javascript-application-workflows.md); Linux: procps `ps`                                                       |
@@ -221,7 +223,50 @@ REA потребує Node.js 22.x (>=22.23.4), 24.x (>=24.22.1) або 26+ (>=26
 
 [Прочитати дослідження](https://rea.tools/uk/showcase/th04/) · [Репозиторій реконструкції](https://github.com/N0zoM1z0/th04)
 
+### Створюйте RL-середовища з REA
+
+Запишіть сеанс вебзастосунку, перетворіть його API на інструменти й експортуйте середовище для ШІ-агента. Запустіть його з AgentEnv, а потім додайте завдання та перевірки винагород для RL-навчання або оцінювання.
+
+[Посібник зі створення середовища](https://rea.tools/guides/rl-environments/) ·
+[Дивитися демо в X](https://x.com/reatools/status/2112574822584918075?s=20)
+
 Якщо ви дослідили з REA щось цікаве, поділіться результатом. Створіть [issue](https://github.com/morluto/rea/issues) або [pull request](https://github.com/morluto/rea/pulls) і вкажіть ціль, ваше запитання, як допоміг REA та що ви з'ясували.
+
+<a id="build-rl-environments"></a>
+
+## Створення RL-середовищ
+
+Створіть локальне середовище, де ШІ-агент може тренуватися виконувати завдання, як-от пошук issue або створення папки, без запуску початкового застосунку. Використовуйте його для навчання з підкріпленням (RL) або перевірки того, як агент виконує завдання.
+
+REA перетворює записані API-запити й відповіді на інструменти, які може викликати агент. Середовище використовує записані дані й підтримує зміни лише тоді, коли запис підтверджує їхні ефекти.
+
+Налаштуйте REA у своєму агенті та замініть URL і завдання з папками на власні:
+
+```text
+За допомогою REA створи RL-середовище з мого тестового вебзастосунку:
+http://127.0.0.1:3000
+Охопи перегляд списку папок, створення, перейменування й видалення.
+Можна створювати й видаляти тестові папки. Наявні дані не змінюй.
+Збережи в папку my-env, перевір доступні операції та поясни, як запустити середовище.
+```
+
+<details>
+<summary>Використати командний рядок</summary>
+
+Ці команди підходять, якщо у вас уже є файл із записаними запитами й відповідями застосунку в браузері. Для запуску результату також потрібні AgentEnv і Docker.
+
+```sh
+rea environment-build ./session.har ./my-env --name my-env --json
+agent-env run ./my-env
+```
+
+</details>
+
+REA експортує готове до запуску середовище з базовим тестом запуску й відповідей. Підключіть його до свого RL-фреймворку, щоб задати цілі, додати перевірки винагород і запустити навчання.
+
+[Посібник зі створення середовища](https://rea.tools/guides/rl-environments/) ·
+[Довідник середовищ](../agent-environments.md) ·
+[Дивитися демо в X](https://x.com/reatools/status/2112574822584918075?s=20)
 
 ## Поширені запитання
 

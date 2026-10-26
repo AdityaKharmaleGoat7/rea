@@ -117,6 +117,8 @@ export class EnvironmentStateStore {
   readonly #sequences = new Map<string, number>();
   /** The entities the state held when it was last reset or loaded, whose values no sequence reuses either. */
   #started: readonly StateEntity[] = [];
+  /** The types a served create has added an entity to since the last reset or load. */
+  readonly #createdTypes = new Set<string>();
   /** Baseline and post-start spellings kept known after their entities are deleted. */
   readonly #knownCollections = new Map<string, Set<string>>();
   /** Logical UTF-8 key bytes plus a 64-byte allowance per collection and potential sequence-key record. */
@@ -210,6 +212,7 @@ export class EnvironmentStateStore {
     this.#writes = 0;
     this.#sequences.clear();
     this.#started = this.#content.entities;
+    this.#createdTypes.clear();
     this.#knownCollections.clear();
     this.#collectionHistoryBytes = 0;
     for (const [type, collections] of this.#typeCollections)
@@ -227,6 +230,11 @@ export class EnvironmentStateStore {
   }
 
   /** The entities of a type the state held when it was last reset or loaded. */
+  /** Whether a served create has added an entity of the type since the last reset or load. */
+  createdInto(type: string): boolean {
+    return this.#createdTypes.has(type);
+  }
+
   startedWith(type: string): readonly StateEntity[] {
     return this.#started.filter((entity) => entity.type === type);
   }
@@ -294,21 +302,38 @@ export class EnvironmentStateStore {
       this.#rememberCollection(entity.type, entity.collection);
       this.#collectionHistoryBytes += newCollectionBytes;
     }
+    this.#createdTypes.add(entity.type);
     return ok(undefined);
   }
 
   /** Replace a held entity's values in place, unless the state would outgrow what `data/add` loads. */
   update(entity: StateEntity): Result<void, AnalysisResourceConstraintError> {
-    const key = compositeKey([entity.type, entity.collection, entity.id]);
-    const held = this.#entities.get(key);
-    if (held === undefined) return ok(undefined);
-    const bytes = this.#grown(jsonByteLength(entity) - jsonByteLength(held));
+    return this.updateAll([entity]);
+  }
+
+  /** Replace held entities in one step, unless the state would outgrow what `data/add` loads; a refusal changes nothing. */
+  updateAll(
+    entities: readonly StateEntity[],
+  ): Result<void, AnalysisResourceConstraintError> {
+    const replaced = new Map<StateEntity, StateEntity>();
+    for (const entity of entities) {
+      const held = this.#entities.get(
+        compositeKey([entity.type, entity.collection, entity.id]),
+      );
+      if (held !== undefined) replaced.set(held, entity);
+    }
+    if (replaced.size === 0) return ok(undefined);
+    // Sized from the replacements installed, so an entity named twice counts once.
+    let delta = 0;
+    for (const [held, entity] of replaced)
+      delta += jsonByteLength(entity) - jsonByteLength(held);
+    const bytes = this.#grown(delta);
     if (!bytes.ok) return bytes;
     this.#install(
       {
         ...this.#content,
-        entities: this.#content.entities.map((candidate) =>
-          candidate === held ? entity : candidate,
+        entities: this.#content.entities.map(
+          (candidate) => replaced.get(candidate) ?? candidate,
         ),
       },
       bytes.value,
@@ -317,17 +342,28 @@ export class EnvironmentStateStore {
   }
 
   remove(entity: StateEntity): void {
-    const held = this.#entities.get(
-      compositeKey([entity.type, entity.collection, entity.id]),
+    this.removeAll([entity]);
+  }
+
+  /** Remove held entities in one step. */
+  removeAll(entities: readonly StateEntity[]): void {
+    const held = new Set(
+      entities.flatMap((entity) => {
+        const found = this.#entities.get(
+          compositeKey([entity.type, entity.collection, entity.id]),
+        );
+        return found === undefined ? [] : [found];
+      }),
     );
-    if (held === undefined) return;
-    const entities = this.#content.entities.filter(
-      (candidate) => candidate !== held,
+    if (held.size === 0) return;
+    const kept = this.#content.entities.filter(
+      (candidate) => !held.has(candidate),
     );
-    this.#install(
-      { ...this.#content, entities },
-      this.#bytes - jsonByteLength(held) - (entities.length > 0 ? 1 : 0),
-    );
+    let bytes = this.#bytes;
+    for (const entity of held) bytes -= jsonByteLength(entity);
+    // Each removed entity takes its separator, except the last one an emptied list had none for.
+    bytes -= held.size - (kept.length === 0 ? 1 : 0);
+    this.#install({ ...this.#content, entities: kept }, bytes);
   }
 
   /** Set a held document's value, unless the state would outgrow what `data/add` loads; a value that is not the Evidence's cites no record. */

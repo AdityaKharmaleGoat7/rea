@@ -62,6 +62,12 @@ const cutIdentifierAtBudget = async () => {
 const writeThen = (stream, text, then) =>
   stream.write(text, () => setTimeout(then, 10));
 
+if (mode === "remote_error" || mode === "remote_startup_error")
+  await new Promise((resolve) =>
+    process.stdout.write("Fixture launcher startup output\n", resolve),
+  );
+
+let endpointPublication;
 if (mode === "exit") process.exit(73);
 if (mode === "flood_silent") {
   await floodStdout();
@@ -102,7 +108,14 @@ else {
   });
   if (transport === "unix-socket") server.listen(endpointPath);
   else {
-    server.listen(0, "127.0.0.1", async () => {
+    endpointPublication = (async () => {
+      await new Promise((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", () => {
+          server.off("error", reject);
+          resolve();
+        });
+      });
       const address = server.address();
       if (address === null || typeof address === "string") process.exit(65);
       const pending = `${endpointPath}.pending`;
@@ -115,7 +128,7 @@ else {
         { flag: "wx" },
       );
       await rename(pending, endpointPath);
-    });
+    })();
   }
 }
 
@@ -191,15 +204,20 @@ const handleRequest = (socket, server, request, state) => {
     return;
   }
   if (state.mode === "remote_error" && request.method === "list_procedures") {
-    socket.write(
-      `${JSON.stringify({
-        id: request.id,
-        ok: false,
-        error: {
-          code: "not_found",
-          message: "Unknown Ghidra procedure name",
-        },
-      })}\n`,
+    writeThen(
+      process.stdout,
+      "Fixture request rejected: missing procedure\n",
+      () =>
+        socket.write(
+          `${JSON.stringify({
+            id: request.id,
+            ok: false,
+            error: {
+              code: "not_found",
+              message: "Unknown Ghidra procedure name",
+            },
+          })}\n`,
+        ),
     );
     return;
   }
@@ -258,6 +276,19 @@ const handleRequest = (socket, server, request, state) => {
 };
 
 const handlePing = (socket, request, state) => {
+  if (state.mode === "remote_startup_error") {
+    socket.write(
+      `${JSON.stringify({
+        id: request.id,
+        ok: false,
+        error: {
+          code: "invalid_request",
+          message: "Fixture rejected startup handshake",
+        },
+      })}\n`,
+    );
+    return;
+  }
   state.pings.value += 1;
   if (state.mode === "diagnostic_output" && state.pings.value === 1) {
     const retainedTokenPrefixBytes = Math.floor(state.token.length / 2);
@@ -509,3 +540,5 @@ const stringSearchItem = () => ({
   address: "0x2000",
   value: "fixture value",
 });
+
+await endpointPublication;

@@ -158,6 +158,32 @@ public class ReaJadxMetadataRegression {
     return value;
   }
 
+  private static void verifyRawClassSelectors(Method handle, Object bridge, JadxDecompiler decompiler)
+      throws Exception {
+    List<JavaClass> classes = decompiler.getClassesWithInners();
+    JavaClass nested = classes.stream()
+        .filter(cls -> cls.getRawName().contains("$") && !cls.getRawName().equals(cls.getFullName()))
+        .filter(cls -> classes.stream().filter(other ->
+            other.getFullName().equals(cls.getFullName()) || other.getRawName().equals(cls.getFullName()))
+            .count() == 1)
+        .findFirst().orElseThrow(() -> new AssertionError("Fixture has no unambiguous nested class"));
+    JsonObject raw = arguments(nested.getRawName());
+    JsonObject display = arguments(nested.getFullName());
+    JsonObject summary = call(handle, bridge, "get_class_summary", raw);
+    require(summary.get("raw_name").getAsString().equals(nested.getRawName()),
+        "Class summary discarded original binary identity");
+    require(summary.get("full_name").getAsString().equals(nested.getFullName()),
+        "Class summary replaced the displayed name with the selector");
+    require(summary.equals(call(handle, bridge, "get_class_summary", display)),
+        "Raw and displayed selectors resolved different class metadata");
+    JsonObject references = call(handle, bridge, "get_xrefs_to_class", raw);
+    require(references.get("target").getAsString().equals(nested.getFullName()),
+        "Reference target mixed its lookup selector with its displayed identity");
+    require(references.equals(call(handle, bridge, "get_xrefs_to_class", display)),
+        "Raw and displayed selectors resolved different incoming class references");
+    System.out.println("RAW_CLASS_SELECTOR_REGRESSION_PASS nested=true metadata=true references=true");
+  }
+
   private static void verifyClassPages(Method handle, Object bridge, List<String> inventory)
       throws Exception {
     int pages = 0;
@@ -207,7 +233,8 @@ public class ReaJadxMetadataRegression {
         Path.of(sources, "MixedInitialization.smali").toString(),
         Path.of(sources, "NativeOverload.smali").toString(),
         Path.of(sources, "AbstractShape.smali").toString(),
-        Path.of(sources, "MergedMethod.smali").toString())), "Initializer fixture assembly failed");
+        Path.of(sources, "MergedMethod.smali").toString(),
+        Path.of(sources, "ConstantFields.smali").toString())), "Initializer fixture assembly failed");
     Path apk = directory.resolve("initializers.apk");
     try (ZipOutputStream zip = new ZipOutputStream(Files.newOutputStream(apk))) {
       zip.putNextEntry(new ZipEntry("classes.dex"));
@@ -337,6 +364,7 @@ public class ReaJadxMetadataRegression {
         "Ordinary executable method no longer produces Java");
     verifyNoBodyMethods(handle, bridge, holder.current());
     verifyMergedMethods(handle, bridge);
+    verifyConstantFields(handle, bridge, holder.current());
 
     SessionConfig bounded = new SessionConfig(96, 0, 90000L, 1, List.of(), List.of(), 64, ResourceMode.FULL);
     BuildersKt.runBlocking(EmptyCoroutineContext.INSTANCE,
@@ -362,6 +390,69 @@ public class ReaJadxMetadataRegression {
         && missing.getAsJsonArray("markers").contains(new JsonPrimitive("java_body_unavailable")),
         "Missing Java was interpreted after applying source limits: " + missing);
     System.out.println("INITIALIZER_REGRESSION_PASS folded=2 bounded=true");
+  }
+
+  private static void verifyConstantFields(Method handle, Object bridge, JadxSession session) throws Exception {
+    Map<String, String> encoded = Map.of(
+        "ENABLED", "{\"type\":\"boolean\",\"value\":true}",
+        "LETTER", "{\"type\":\"char\",\"value\":65}",
+        "MAX_SIZE", "{\"type\":\"int\",\"value\":1024}",
+        "PACKET_FLAG_CONFIG", "{\"type\":\"long\",\"value\":\"-9223372036854775808\"}",
+        "RATIO", "{\"type\":\"double\",\"value\":\"0.5\"}",
+        "SCALE", "{\"type\":\"float\",\"value\":\"1.5\"}",
+        "SMALL", "{\"type\":\"byte\",\"value\":127}",
+        "TAG", "{\"type\":\"string\",\"value\":\"flags\"}",
+        "WIDE", "{\"type\":\"short\",\"value\":32767}");
+    // Null, unencoded, non-final and instance fields have no reportable DEX static value.
+    Set<String> absent = Set.of("NOTHING", "INSTANCE", "COUNTER", "width");
+    JsonObject valuesInput = arguments("fixture.ConstantFields");
+    valuesInput.addProperty("dex_static_values", true);
+    JsonObject summary = call(handle, bridge, "get_class_summary", valuesInput);
+    ClassNode node = session.getClasses().stream()
+        .filter(cls -> cls.getFullName().equals("fixture.ConstantFields"))
+        .findFirst().orElseThrow().getClassNode();
+    require(node.getState() == ProcessState.NOT_LOADED, "Constant field metadata generated source");
+    JsonArray fields = summary.getAsJsonArray("fields");
+    require(fields.size() == encoded.size() + absent.size(), "Constant field inventory changed: " + fields);
+    for (JsonElement entry : fields) {
+      JsonObject field = entry.getAsJsonObject();
+      String name = field.get("name").getAsString();
+      require(encoded.containsKey(name) || absent.contains(name), "Unexpected field: " + name);
+      JsonElement value = field.get("dex_static_value");
+      require(encoded.containsKey(name) ? JsonParser.parseString(encoded.get(name)).equals(value) : value == null,
+          "Wrong DEX static value for " + name + ": " + field);
+    }
+    // Fields assigned only by <clinit> carry a JADX null placeholder, not a DEX value.
+    for (String[] assigned : new String[][] {
+        { "fixture.InitializationPolicy", "POLICY" }, { "fixture.MixedInitialization", "LABEL" } }) {
+      JsonObject assignedInput = arguments(assigned[0]);
+      assignedInput.addProperty("dex_static_values", true);
+      for (JsonElement entry : call(handle, bridge, "get_class_summary", assignedInput)
+          .getAsJsonArray("fields")) {
+        JsonObject field = entry.getAsJsonObject();
+        if (field.get("name").getAsString().equals(assigned[1]))
+          require(!field.has("dex_static_value"), "Initializer-assigned field reported a value: " + field);
+      }
+    }
+    require(summary.equals(call(handle, bridge, "get_class_summary", valuesInput)),
+        "Repeated constant field summary changed");
+    // Method and reference lookups omit the flag and must get the member-only summary.
+    JsonObject members = call(handle, bridge, "get_class_summary", arguments("fixture.ConstantFields"));
+    JsonObject stripped = summary.deepCopy();
+    for (JsonElement entry : stripped.getAsJsonArray("fields")) entry.getAsJsonObject().remove("dex_static_value");
+    require(members.equals(stripped), "Default class summary carried DEX static values: " + members);
+    JsonObject explicitOff = arguments("fixture.ConstantFields");
+    explicitOff.addProperty("dex_static_values", false);
+    require(members.equals(call(handle, bridge, "get_class_summary", explicitOff)),
+        "dex_static_values=false returned DEX static values");
+    JsonObject malformed = arguments("fixture.ConstantFields");
+    malformed.addProperty("dex_static_values", "true");
+    boolean refused = false;
+    try { call(handle, bridge, "get_class_summary", malformed); }
+    catch (AssertionError failure) { refused = failure.getCause() instanceof IllegalArgumentException; }
+    require(refused, "Non-boolean dex_static_values was accepted");
+    System.out.println("CONSTANT_FIELD_REGRESSION_PASS encoded=" + encoded.size() + " absent=" + absent.size()
+        + " opt_in=true");
   }
 
   private static void verifyMergedMethods(Method handle, Object bridge) throws Exception {
@@ -553,6 +644,7 @@ public class ReaJadxMetadataRegression {
       Method handle = bridgeType.getDeclaredMethod("handle", String.class, kotlinx.serialization.json.JsonObject.class);
       handle.setAccessible(true);
       verifyClassPages(handle, bridge, session.getClassFqns());
+      verifyRawClassSelectors(handle, bridge, decompiler);
       JsonObject apiArgs = arguments("io.appium.android.apis.ApiDemos");
       JsonObject apiSummary = call(handle, bridge, "get_class_summary", apiArgs);
       for (var entry : states.entrySet()) require(entry.getKey().getState() == entry.getValue(),

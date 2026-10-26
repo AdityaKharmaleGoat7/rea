@@ -46,7 +46,19 @@ import {
   environmentStateCaptureFixture,
 } from "../../fixtures/analysisView.js";
 import { createTestBinarySession } from "../../fixtures/binarySession.js";
-import { BINARY_LAYOUT_TEST_PROVIDER } from "../../fixtures/binaryDiagnostics/layout.js";
+import { createLinkedIl2cppMetadataFixture } from "../../fixtures/il2cpp/metadata.js";
+import {
+  createIl2cppBinaryFixture,
+  FIXTURE_RETURN_TYPE_NAME,
+} from "../../fixtures/il2cpp/binary.js";
+import {
+  analysisViewResultSchema,
+  il2cppMetadataSummaryViewResultSchema,
+} from "../../../src/domain/analysisView/analysisView.js";
+import {
+  BINARY_LAYOUT_TEST_PROVIDER,
+  binaryLayoutFixture,
+} from "../../fixtures/binaryDiagnostics/layout.js";
 import { wasmArtifactFixture } from "../../fixtures/wasm/artifact.js";
 import { evmInterfaceFixture } from "../../fixtures/evm/interface.js";
 import type { RelationshipCoverage } from "../../../src/domain/relationshipCoverage.js";
@@ -85,6 +97,115 @@ const connect = async (
   await client.connect(clientTransport);
   return { client, session };
 };
+
+it("selects every IL2CPP native type reference by rendered name with stable row identity", async () => {
+  const { client } = await connect();
+  const root = await createTestTempDirectory("rea-il2cpp-native-names-");
+  const path = join(root, "global-metadata.dat");
+  const binaryPath = join(root, "GameAssembly.dylib");
+  await writeFile(binaryPath, createIl2cppBinaryFixture());
+  const inspect = async (version: 27 | 31) => {
+    await writeFile(path, createLinkedIl2cppMetadataFixture({ version }).bytes);
+    const inspected = await client.callTool({
+      name: "inspect_il2cpp_metadata",
+      arguments: { path, binary_path: binaryPath },
+    });
+    expect(inspected.isError, JSON.stringify(inspected)).not.toBe(true);
+    const summary = il2cppMetadataSummaryViewResultSchema.parse(
+      parseEvidence(inspected.structuredContent).normalized_result,
+    );
+    return {
+      kind: "retained-evidence",
+      evidence_id: summary.parent_evidence_id,
+    };
+  };
+  let source = await inspect(31);
+  const select = async (
+    collection: "return_types" | "field_types" | "parameter_types",
+    filters: Record<string, unknown>,
+  ) => {
+    const response = await client.callTool({
+      name: "inspect_analysis_view",
+      arguments: {
+        source,
+        view: { kind: "il2cpp-metadata", collection, ...filters },
+      },
+    });
+    expect(response.isError, JSON.stringify(response)).not.toBe(true);
+    const page = analysisViewResultSchema.parse(
+      parseEvidence(response.structuredContent).normalized_result,
+    );
+    if (page.kind !== "il2cpp-metadata")
+      throw new Error("Expected IL2CPP page");
+    return page;
+  };
+  for (const [collection, count] of [
+    ["return_types", 5],
+    ["field_types", 2],
+    ["parameter_types", 1],
+  ] as const) {
+    const names = [FIXTURE_RETURN_TYPE_NAME];
+    const expected = Array.from({ length: count }, (_, index) => ({
+      index,
+      type: 0,
+      name: FIXTURE_RETURN_TYPE_NAME,
+    }));
+    const unfiltered = await select(collection, {});
+    expect(unfiltered.items).toEqual(expected);
+    const all = await select(collection, { names });
+    expect(all.items).toEqual(expected);
+    expect(all.coverage).toMatchObject({ total: count, exhausted: true });
+    const selected = await select(collection, {
+      names,
+      indices: [count - 1, 0, count - 1],
+      offset: 1,
+      limit: 1,
+      fields: ["type"],
+    });
+    expect(selected.items).toEqual(
+      count === 1 ? [] : [{ index: count - 1, type: 0 }],
+    );
+    expect(selected.coverage).toMatchObject({
+      total: Math.min(count, 2),
+      exhausted: true,
+    });
+    for (const missing of [[], ["absent"], ["system.Größe<int>[]"]]) {
+      const empty = await select(collection, { names: missing });
+      expect(empty.items).toEqual([]);
+      expect(empty.coverage).toMatchObject({ total: 0, exhausted: true });
+    }
+  }
+  const owned = await select("parameter_types", {
+    names: [FIXTURE_RETURN_TYPE_NAME],
+    method_indices: [2],
+  });
+  expect(owned.items).toEqual([
+    { index: 0, type: 0, name: FIXTURE_RETURN_TYPE_NAME },
+  ]);
+  const otherOwner = await select("parameter_types", {
+    names: [FIXTURE_RETURN_TYPE_NAME],
+    method_indices: [0],
+  });
+  expect(otherOwner.items).toEqual([]);
+  // Version 27 intentionally retains unavailable native display names as null.
+  source = await inspect(27);
+  for (const collection of [
+    "return_types",
+    "field_types",
+    "parameter_types",
+  ] as const) {
+    const unfiltered = await select(collection, {});
+    expect(unfiltered.items.length).toBeGreaterThan(0);
+    expect(
+      unfiltered.items.every((row) => "name" in row && row.name === null),
+    ).toBe(true);
+    const unavailable = await select(collection, {
+      names: [FIXTURE_RETURN_TYPE_NAME, "null", ""],
+    });
+    expect(unavailable.items).toEqual([]);
+    expect(unavailable.coverage).toMatchObject({ total: 0, exhausted: true });
+  }
+});
 
 it("preserves native relationship coverage through inline and retained MCP views", async () => {
   const { client, session } = await connect();
@@ -538,6 +659,39 @@ it("reports a tampered inline Evidence ID at its full MCP source path", async ()
       ],
     },
   });
+});
+
+it("reports empty retained layout selectors without index bounds", async () => {
+  const { client, session } = await connect();
+  const parent = analysisViewLayoutEvidence(binaryLayoutFixture());
+  expect(session.recordEvidence(parent).ok).toBe(true);
+  for (const collection of ["sections", "symbols"] as const) {
+    const response = await client.callTool({
+      name: "inspect_analysis_view",
+      arguments: {
+        source: { kind: "retained-evidence", evidence_id: parent.evidence_id },
+        view: { kind: "item", collection, selector: { index: 0 } },
+      },
+    });
+    const error = parseMcpToolError(response).error;
+    expect(error).toMatchObject({
+      code: "invalid_request",
+      details: {
+        issues: [
+          {
+            path: ["view", "selector", "index"],
+            reason: "invalid_value",
+            message: expect.stringContaining(`No retained ${collection}`),
+          },
+        ],
+      },
+    });
+    expect(error.details).not.toHaveProperty("issues.0.minimum");
+    expect(error.details).not.toHaveProperty("issues.0.maximum");
+  }
+  expect(session.evidenceById(parent.evidence_id)).toEqual(
+    parseEvidence(parent),
+  );
 });
 
 it("locates malformed PCAP results within inline and retained view sources", async () => {
@@ -1307,6 +1461,52 @@ it("extracts an environment state identically from retained, portable and file M
   });
   expect(parseMcpToolError(refused).error.code).toBe("unsupported_target");
   expect(JSON.stringify(refused)).not.toContain("probe folder");
+  await client.ping();
+});
+
+it("reports environment coverage identically from retained, portable and file MCP Evidence", async () => {
+  const { client, session } = await connect();
+  const { ajv, inputSchema, outputSchema } = await advertisedMcpToolSchemas(
+    client,
+    "inspect_analysis_view",
+    schemaValidation.assertions,
+  );
+  const parent = analysisViewCaptureEvidence(environmentStateCaptureFixture());
+  expect(session.recordEvidence(parent).ok).toBe(true);
+  const evidencePath = join(
+    await createTestTempDirectory("rea-coverage-file-mcp-"),
+    "capture.json",
+  );
+  await writeFile(evidencePath, JSON.stringify(parent));
+  const rules = ["after-uid-literal", "opaque-token", "sibling-variance"];
+  const outputs = [];
+  for (const source of [
+    { kind: "inline", evidence: parent },
+    { kind: "retained-evidence", evidence_id: parent.evidence_id },
+    { kind: "evidence-file", path: evidencePath },
+  ]) {
+    const view = { kind: "environment-coverage", template_rules: rules };
+    expect(ajv.validate(inputSchema, { source, view })).toBe(true);
+    const response = await client.callTool({
+      name: "inspect_analysis_view",
+      arguments: { source, view },
+    });
+    expect(response.isError).not.toBe(true);
+    expect(
+      ajv.validate(outputSchema, response.structuredContent),
+      JSON.stringify(ajv.errors),
+    ).toBe(true);
+    const evidence = parseEvidence(response.structuredContent);
+    expect(evidence.confidence).toBe("inferred");
+    expect(evidence.normalized_result).toMatchObject({
+      kind: "environment-coverage",
+      reads: { state: expect.any(Number) },
+      writes: { served: expect.any(Array), withheld: expect.any(Array) },
+    });
+    outputs.push(evidence.normalized_result);
+  }
+  expect(outputs[1]).toEqual(outputs[0]);
+  expect(outputs[2]).toEqual(outputs[0]);
   await client.ping();
 });
 

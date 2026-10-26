@@ -4,7 +4,10 @@ import { Cli, Formatter } from "incur";
 import { estimateTokenCount } from "tokenx";
 import { expect, it } from "vitest";
 
-import { parseCliOutputArguments } from "../../../src/cliOutput.js";
+import {
+  parseCliOutputArguments,
+  renderCliDocument,
+} from "../../../src/cliOutput.js";
 import {
   createCliResultOutput,
   streamCliCommandResults,
@@ -22,11 +25,16 @@ const freezeRecursively = <T>(value: T): T => {
 const runFilteredCli = async (
   value: unknown,
   format: "json" | "jsonl" | "yaml" | "toon" | "md",
-  filter: string,
+  filter?: string,
 ): Promise<string> => {
   const cli = Cli.create("filtered-array-test", { sync: false });
   cli.command("rows", { run: () => value });
-  const args = ["rows", "--format", format, "--filter-output", filter];
+  const args = [
+    "rows",
+    "--format",
+    format,
+    ...(filter === undefined ? [] : ["--filter-output", filter]),
+  ];
   const chunks: Buffer[] = [];
   const output = createCliResultOutput(
     parseCliOutputArguments(args),
@@ -53,6 +61,47 @@ const runFilteredCli = async (
   expect(output.failed).toBe(false);
   return Buffer.concat(chunks).toString("utf8");
 };
+
+it("renders only each record's own fields in heterogeneous Markdown tables", async () => {
+  const value: unknown = JSON.parse(
+    '[{"name":"first","constructor":"ctor","toString":"text","__proto__":"proto","enabled":false,"count":0},{"name":"second"},{"name":"third","constructor":0,"toString":false,"__proto__":null}]',
+  );
+  freezeRecursively(value);
+  const json = await runFilteredCli(value, "json");
+  expect(JSON.parse(json)).toEqual(value);
+  const markdown = await runFilteredCli(value, "md");
+  const rows = markdown
+    .trim()
+    .split("\n")
+    .map((line) =>
+      line
+        .split("|")
+        .slice(1, -1)
+        .map((cell) => cell.trim()),
+    );
+  expect(rows[0]).toEqual([
+    "name",
+    "constructor",
+    "toString",
+    "\\_\\_proto\\_\\_",
+    "enabled",
+    "count",
+  ]);
+  expect(rows.slice(2)).toEqual([
+    ["first", "ctor", "text", "proto", "false", "0"],
+    ["second", "", "", "", "", ""],
+    ["third", "0", "false", "null", "", ""],
+  ]);
+});
+
+it("formats arrays of empty objects without columns as JSON in Markdown", async () => {
+  const value: unknown = [{}, {}];
+  freezeRecursively(value);
+  const json = await runFilteredCli(value, "json");
+  expect(JSON.parse(json)).toEqual(value);
+  const markdown = await runFilteredCli(value, "md");
+  expect(markdown).toBe("[{},{}]\n");
+});
 
 it.each(
   (["json", "jsonl"] as const).flatMap((format) =>
@@ -300,10 +349,9 @@ it.each(["json", "jsonl", "yaml", "toon", "md"] as const)(
           .split("\n")
           .map((line) => JSON.parse(line)),
       ).toEqual(expected);
-    else if (format === "md") {
-      expect(outputs[0]).toContain(`| ${JSON.stringify(expected[0]!.rows)} |`);
-      expect(outputs[0]).not.toContain("[object Object]");
-    } else expect(outputs[0]).toBe(`${Formatter.format(expected, format)}\n`);
+    else if (format === "md")
+      expect(outputs[0]).toBe(renderCliDocument(expected, format, false));
+    else expect(outputs[0]).toBe(`${Formatter.format(expected, format)}\n`);
     expect(projectionSource[0]?.rows[0]?.retained).toEqual([0, 10]);
   },
 );
@@ -360,10 +408,9 @@ it.each(["json", "jsonl", "yaml", "toon", "md"] as const)(
           .split("\n")
           .map((line) => JSON.parse(line)),
       ).toEqual(expected);
-    else if (format === "md") {
-      expect(outputs[0]).toContain(`| ${JSON.stringify(expected[0]!.rows)} |`);
-      expect(outputs[0]).not.toContain("[object Object]");
-    } else expect(outputs[0]).toBe(`${Formatter.format(expected, format)}\n`);
+    else if (format === "md")
+      expect(outputs[0]).toBe(renderCliDocument(expected, format, false));
+    else expect(outputs[0]).toBe(`${Formatter.format(expected, format)}\n`);
     expect(projectionSource).toEqual(before);
   },
 );

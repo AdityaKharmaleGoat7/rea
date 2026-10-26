@@ -113,7 +113,7 @@ describe.skipIf(process.platform !== "darwin")(
             ]),
           },
         });
-        expect(await readFile(path)).toEqual(source);
+        expect(Buffer.compare(await readFile(path), source)).toBe(0);
       },
     );
 
@@ -281,7 +281,17 @@ describe.skipIf(process.platform !== "darwin")(
               ],
             },
             bundle: { identifier: "com.example.types", executable: "App" },
-            provenance: [{ tool: "file" }],
+            // An XML source also records its successful native format validation.
+            provenance:
+              format === "xml"
+                ? [
+                    { tool: "file" },
+                    {
+                      tool: "plutil",
+                      command: ["/usr/bin/plutil", "-lint", "--", "$PLIST"],
+                    },
+                  ]
+                : [{ tool: "file" }],
             limitations: [expect.stringContaining("2 non-finite real")],
           },
         });

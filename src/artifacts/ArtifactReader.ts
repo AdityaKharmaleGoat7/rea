@@ -36,7 +36,7 @@ export interface ArtifactReaderFailureOptions extends ErrorOptions {
 /** Archive-neutral entry metadata. Reader adapters never choose output paths. */
 export interface ArtifactEntry {
   readonly path: string;
-  /** Exact reader-source spelling when its admitted path omits source syntax. */
+  /** Exact reader-source path or opaque key before logical path mapping. */
   readonly sourcePath?: string;
   readonly kind: "file" | "directory" | "symlink" | "slice" | "metadata";
   readonly declaredSize: number | null;
@@ -100,6 +100,7 @@ export const sameArtifactEntry = (
   produced: ArtifactEntry,
 ): boolean =>
   entry.path === produced.path &&
+  entry.sourcePath === produced.sourcePath &&
   entry.kind === produced.kind &&
   entry.declaredSize === produced.declaredSize &&
   entry.compressedSize === produced.compressedSize &&
@@ -175,6 +176,7 @@ export interface ArtifactReader {
     | "asar"
     | "godot-pck"
     | "pyinstaller"
+    | "node-sea"
     | "file";
   entries(
     signal?: AbortSignal,
@@ -196,7 +198,7 @@ export class ArtifactReaderFailure extends Error {
   readonly cancellation: { readonly reason: unknown } | undefined;
   readonly cleanup: AnalysisCleanupObservation | undefined;
   readonly cleanupLeases: readonly AnalysisCleanupLease[] | undefined;
-  readonly partialObservation: AnalysisPartialObservation | undefined;
+  partialObservation: AnalysisPartialObservation | undefined;
   /** The constrained bound for a `limit` reason, when the reader knows it. */
   readonly boundary: ArtifactLimitBoundary | undefined;
   /** Named admission for a limit whose public recovery is owned by the producer. */
@@ -227,6 +229,12 @@ export class ArtifactReaderFailure extends Error {
     this.partialObservation = options?.partialObservation;
     this.boundary = options?.boundary;
     this.admission = options?.admission;
+  }
+
+  /** Retain completed facts when a later artifact step fails. */
+  retainPartialObservation(observation: AnalysisPartialObservation): this {
+    this.partialObservation ??= observation;
+    return this;
   }
 
   /** Preserve the primary failure and observation. Supplied leases must cover all merged cleanup. */
